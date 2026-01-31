@@ -1,0 +1,128 @@
+import mongoose from 'mongoose';
+
+/**
+ * Invoice Model
+ * Tracks commission invoices generated from completed cases
+ * Supports invoice approval workflow with escalation handling
+ */
+const invoiceSchema = new mongoose.Schema(
+  {
+    invoiceNumber: {
+      type: String,
+      required: true,
+      unique: true,
+      index: true,
+    },
+
+    lead: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Lead',
+      required: true,
+      index: true,
+    },
+
+    agent: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true,
+      index: true,
+    },
+
+    franchise: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Franchise',
+      required: true,
+    },
+
+    // Commission details
+    commissionAmount: {
+      type: Number,
+      required: true,
+    },
+
+    tdsAmount: {
+      type: Number,
+      default: 0,
+    },
+
+    tdsPercentage: {
+      type: Number,
+      default: 2, // 2% TDS
+    },
+
+    netPayable: {
+      type: Number,
+      required: true,
+    },
+
+    // Invoice status workflow
+    status: {
+      type: String,
+      enum: ['draft', 'pending', 'approved', 'rejected', 'escalated', 'paid'],
+      default: 'pending',
+      index: true,
+    },
+
+    // Escalation details
+    isEscalated: {
+      type: Boolean,
+      default: false,
+    },
+
+    escalationReason: String,
+    escalationRemarks: String,
+    escalatedAt: Date,
+    escalatedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
+
+    // Resolution details
+    resolutionRemarks: String,
+    resolvedAt: Date,
+    resolvedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
+
+    // Approval details
+    approvedAt: Date,
+    approvedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
+
+    // Rejection details
+    rejectedAt: Date,
+    rejectedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
+    rejectionReason: String,
+
+    // Agent acceptance
+    acceptedAt: Date,
+    agentRemarks: String,
+
+    // Invoice date
+    invoiceDate: {
+      type: Date,
+      default: Date.now,
+    },
+
+    // Payout reference
+    payout: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Payout',
+    },
+  },
+  { timestamps: true }
+);
+
+// Indexes for efficient queries
+invoiceSchema.index({ agent: 1, status: 1 });
+invoiceSchema.index({ franchise: 1, status: 1 });
+invoiceSchema.index({ status: 1, createdAt: -1 });
+invoiceSchema.index({ isEscalated: 1, status: 1 });
+
+export default mongoose.model('Invoice', invoiceSchema);
