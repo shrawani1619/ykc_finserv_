@@ -11,40 +11,49 @@ import mongoose from 'mongoose';
  */
 export const getAgentDashboard = async (req, res, next) => {
   try {
-    // Agents are stored in User model, so use User._id directly
     const agentId = new mongoose.Types.ObjectId(req.user._id);
+    const { bankId, codeUse, leadStatus, dateFrom, dateTo, limit } = req.query;
 
-    // Get leads statistics
-    const totalLeads = await Lead.countDocuments({ agent: agentId });
-    const pendingLeads = await Lead.countDocuments({ agent: agentId, verificationStatus: 'pending' });
-    const verifiedLeads = await Lead.countDocuments({ agent: agentId, verificationStatus: 'verified' });
-    const completedLeads = await Lead.countDocuments({ agent: agentId, status: 'completed' });
+    const baseMatch = { agent: agentId };
+    if (bankId) baseMatch.bank = new mongoose.Types.ObjectId(bankId);
+    if (codeUse && String(codeUse).trim()) baseMatch.dsaCode = new RegExp(String(codeUse).trim(), 'i');
+    if (leadStatus && String(leadStatus).trim()) baseMatch.status = leadStatus;
+    if (dateFrom || dateTo) {
+      baseMatch.createdAt = {};
+      if (dateFrom) baseMatch.createdAt.$gte = new Date(dateFrom);
+      if (dateTo) {
+        const end = new Date(dateTo);
+        end.setHours(23, 59, 59, 999);
+        baseMatch.createdAt.$lte = end;
+      }
+    }
+    const limitNum = limit ? Math.min(parseInt(limit, 10) || 10, 100) : 10;
 
-    // Get invoice statistics
+    const totalLeads = await Lead.countDocuments(baseMatch);
+    const pendingLeads = await Lead.countDocuments({ ...baseMatch, verificationStatus: 'pending' });
+    const verifiedLeads = await Lead.countDocuments({ ...baseMatch, verificationStatus: 'verified' });
+    const completedLeads = await Lead.countDocuments({ ...baseMatch, status: 'completed' });
+
     const pendingInvoices = await Invoice.countDocuments({ agent: agentId, status: 'pending' });
     const approvedInvoices = await Invoice.countDocuments({ agent: agentId, status: 'approved' });
     const escalatedInvoices = await Invoice.countDocuments({ agent: agentId, status: 'escalated' });
 
-    // Get payout statistics
     const pendingPayouts = await Payout.countDocuments({ agent: agentId, status: 'pending' });
     const paidPayouts = await Payout.countDocuments({ agent: agentId, status: 'paid' });
 
-    // Calculate total commission
     const commissionAggregation = await Invoice.aggregate([
       { $match: { agent: agentId } },
       { $group: { _id: null, total: { $sum: '$commissionAmount' } } },
     ]);
     const totalCommission = commissionAggregation[0]?.total || 0;
 
-    // Recent leads
-    const recentLeads = await Lead.find({ agent: agentId })
+    const recentLeads = await Lead.find(baseMatch)
       .populate('bank', 'name')
       .sort({ createdAt: -1 })
-      .limit(5);
+      .limit(Math.min(limitNum, 5));
 
-    // Completed leads without invoices (for raising payout invoices)
     const completedLeadsWithoutInvoices = await Lead.find({
-      agent: agentId,
+      ...baseMatch,
       status: 'completed',
       $or: [
         { isInvoiceGenerated: false },
@@ -55,9 +64,8 @@ export const getAgentDashboard = async (req, res, next) => {
     })
       .populate('bank', 'name')
       .sort({ createdAt: -1 })
-      .limit(10);
+      .limit(limitNum);
 
-    // Pending invoices that need action (accept/escalate)
     const pendingInvoicesForAction = await Invoice.find({
       agent: agentId,
       status: 'pending',
@@ -65,9 +73,8 @@ export const getAgentDashboard = async (req, res, next) => {
       .populate('lead', 'loanAccountNo loanAmount')
       .populate('franchise', 'name')
       .sort({ createdAt: -1 })
-      .limit(10);
+      .limit(limitNum);
 
-    // Escalated invoices
     const escalatedInvoicesList = await Invoice.find({
       agent: agentId,
       status: 'escalated',
@@ -75,7 +82,7 @@ export const getAgentDashboard = async (req, res, next) => {
       .populate('lead', 'loanAccountNo loanAmount')
       .populate('franchise', 'name')
       .sort({ escalatedAt: -1 })
-      .limit(10);
+      .limit(limitNum);
 
     res.status(200).json({
       success: true,
@@ -213,6 +220,48 @@ export const getAdminDashboard = async (req, res, next) => {
     const leadStatusBreakdown = await Lead.aggregate([
       { $group: { _id: '$status', count: { $sum: 1 } } },
     ]);
+
+    // Loan distribution (by loan type, with count and percentage)
+    const loanDistributionAgg = await Lead.aggregate([
+      { $group: { _id: '$loanType', count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+    ]);
+    const totalForLoan = loanDistributionAgg.reduce((s, i) => s + i.count, 0) || 1;
+    const loanTypeLabels = {
+      personal_loan: 'Personal Loan',
+      home_loan: 'Home Loan',
+      business_loan: 'Business Loan',
+      loan_against_property: 'Loan Against Property',
+      education_loan: 'Education Loan',
+      car_loan: 'Car Loan',
+      gold_loan: 'Gold Loan',
+    };
+    const loanDistributionColors = ['#f97316', '#3b82f6', '#1e40af', '#22c55e', '#84cc16', '#eab308', '#a855f7'];
+    const loanDistributionRaw = loanDistributionAgg.map((item, idx) => ({
+      name: loanTypeLabels[item._id] || item._id,
+      value: Math.round((item.count / totalForLoan) * 100),
+      count: item.count,
+      color: loanDistributionColors[idx % loanDistributionColors.length],
+    }));
+    const sumPct = loanDistributionRaw.reduce((s, i) => s + i.value, 0);
+    const loanDistribution = loanDistributionRaw.map((item, idx) => ({
+      ...item,
+      value: idx === 0 ? item.value + (100 - sumPct) : item.value,
+    }));
+
+    // Lead conversion funnel: Logged, Sanctioned, Disbursed, Completed, Rejected
+    const loggedCount = await Lead.countDocuments({ status: 'logged' });
+    const sanctionedCount = await Lead.countDocuments({ status: 'sanctioned' });
+    const disbursedCount = await Lead.countDocuments({ status: { $in: ['partial_disbursed', 'disbursed'] } });
+    const completedCount = await Lead.countDocuments({ status: 'completed' });
+    const rejectedCount = await Lead.countDocuments({ status: 'rejected' });
+    const leadConversionFunnel = [
+      { stage: 'Logged', value: loggedCount, fill: '#f97316' },
+      { stage: 'Sanctioned', value: sanctionedCount, fill: '#84cc16' },
+      { stage: 'Disbursed', value: disbursedCount, fill: '#3b82f6' },
+      { stage: 'Completed', value: completedCount, fill: '#ea580c' },
+      { stage: 'Rejected', value: rejectedCount, fill: '#b91c1c' },
+    ];
 
     // Recent related lists
     const recentLeads = await Lead.find()
@@ -383,6 +432,8 @@ export const getAdminDashboard = async (req, res, next) => {
         totalPayouts,
         totalRevenue: totalCommission,
         leadStatusBreakdown,
+        loanDistribution,
+        leadConversionFunnel,
         recentLeads,
         recentAgents,
         recentFranchises,
@@ -478,6 +529,49 @@ export const getFranchiseOwnerDashboard = async (req, res, next) => {
       { $match: { franchise: franchiseObjectId } },
       { $group: { _id: '$status', count: { $sum: 1 } } },
     ]);
+
+    // Loan distribution (filtered by franchise)
+    const loanDistributionAggF = await Lead.aggregate([
+      { $match: { franchise: franchiseObjectId } },
+      { $group: { _id: '$loanType', count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+    ]);
+    const totalForLoanF = loanDistributionAggF.reduce((s, i) => s + i.count, 0) || 1;
+    const loanTypeLabelsF = {
+      personal_loan: 'Personal Loan',
+      home_loan: 'Home Loan',
+      business_loan: 'Business Loan',
+      loan_against_property: 'Loan Against Property',
+      education_loan: 'Education Loan',
+      car_loan: 'Car Loan',
+      gold_loan: 'Gold Loan',
+    };
+    const loanDistributionColorsF = ['#f97316', '#3b82f6', '#1e40af', '#22c55e', '#84cc16', '#eab308', '#a855f7'];
+    const loanDistributionRawF = loanDistributionAggF.map((item, idx) => ({
+      name: loanTypeLabelsF[item._id] || item._id,
+      value: Math.round((item.count / totalForLoanF) * 100),
+      count: item.count,
+      color: loanDistributionColorsF[idx % loanDistributionColorsF.length],
+    }));
+    const sumPctF = loanDistributionRawF.reduce((s, i) => s + i.value, 0);
+    const loanDistribution = loanDistributionRawF.map((item, idx) => ({
+      ...item,
+      value: idx === 0 ? item.value + (100 - sumPctF) : item.value,
+    }));
+
+    // Lead conversion funnel (filtered by franchise)
+    const loggedCountF = await Lead.countDocuments({ franchise: franchiseObjectId, status: 'logged' });
+    const sanctionedCountF = await Lead.countDocuments({ franchise: franchiseObjectId, status: 'sanctioned' });
+    const disbursedCountF = await Lead.countDocuments({ franchise: franchiseObjectId, status: { $in: ['partial_disbursed', 'disbursed'] } });
+    const completedCountF = await Lead.countDocuments({ franchise: franchiseObjectId, status: 'completed' });
+    const rejectedCountF = await Lead.countDocuments({ franchise: franchiseObjectId, status: 'rejected' });
+    const leadConversionFunnel = [
+      { stage: 'Logged', value: loggedCountF, fill: '#f97316' },
+      { stage: 'Sanctioned', value: sanctionedCountF, fill: '#84cc16' },
+      { stage: 'Disbursed', value: disbursedCountF, fill: '#3b82f6' },
+      { stage: 'Completed', value: completedCountF, fill: '#ea580c' },
+      { stage: 'Rejected', value: rejectedCountF, fill: '#b91c1c' },
+    ];
 
     // Recent related lists (filtered by franchise)
     const recentLeads = await Lead.find({ franchise: franchiseObjectId })
@@ -649,6 +743,8 @@ export const getFranchiseOwnerDashboard = async (req, res, next) => {
         totalPayouts,
         totalRevenue: totalCommission,
         leadStatusBreakdown,
+        loanDistribution,
+        leadConversionFunnel,
         recentLeads,
         recentAgents,
         relationshipManagers, // Relationship managers assigned to handle franchises

@@ -94,3 +94,4 @@ agentSchema.methods.comparePassword = async function (enteredPassword) {
 };
 
 export default mongoose.model('Agent', agentSchema);
+    
