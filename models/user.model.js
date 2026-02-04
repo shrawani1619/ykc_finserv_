@@ -4,7 +4,7 @@ import bcrypt from 'bcryptjs';
 /**
  * Unified User Model
  * Consolidates Agent and Staff into a single user model with role-based access control
- * Supports: super_admin, relationship_manager, franchise_manager, franchise_owner, agent, accounts_manager
+ * Supports: super_admin, relationship_manager, regional_manager, franchise, agent, accounts_manager
  */
 const userSchema = new mongoose.Schema(
   {
@@ -48,10 +48,10 @@ const userSchema = new mongoose.Schema(
     role: {
       type: String,
       enum: [
-        'super_admin', 
+        'super_admin',
+        'regional_manager',
+        'franchise',
         'relationship_manager',
-        'franchise_manager',
-        'franchise_owner',
         'agent',
         'accounts_manager',
       ],
@@ -65,7 +65,7 @@ const userSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Franchise',
       required: function () {
-        return ['agent', 'franchise_owner'].includes(this.role);
+        return ['agent', 'franchise'].includes(this.role);
       },
     },
 
@@ -74,7 +74,7 @@ const userSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Franchise',
       required: function () {
-        return this.role === 'franchise_owner';
+        return this.role === 'franchise';
       },
     },
 
@@ -157,7 +157,7 @@ userSchema.methods.comparePassword = async function (enteredPassword) {
 
 // Method to check if user has permission
 userSchema.methods.hasPermission = function (permission) {
-  if (this.role === 'super_admin') return true;
+  if (['super_admin', 'regional_manager'].includes(this.role)) return true;
   return this.permissions.includes(permission);
 };
 

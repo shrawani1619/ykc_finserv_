@@ -25,7 +25,7 @@ documentRouter.get('/:entityType/:entityId', getDocuments);
 documentRouter.get('/:id', getDocumentById);
 
 // Verify document (Staff/Franchise Owner)
-documentRouter.post('/:id/verify', requireRole('relationship_manager', 'franchise_owner'), verifyDocument);
+documentRouter.post('/:id/verify', requireRole('relationship_manager', 'franchise'), verifyDocument);
 
 // Delete document
 documentRouter.delete('/:id', deleteDocument);

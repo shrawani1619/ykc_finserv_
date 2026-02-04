@@ -15,7 +15,7 @@ export const getInvoices = async (req, res, next) => {
     // Role-based filtering
     if (req.user.role === 'agent') {
       query.agent = req.user._id;
-    } else if (req.user.role === 'franchise_owner') {
+    } else if (req.user.role === 'franchise') {
       // Franchise owners should only see invoices from their franchise
       if (!req.user.franchiseOwned) {
         return res.status(400).json({
@@ -73,7 +73,7 @@ export const getInvoiceById = async (req, res, next) => {
       });
     }
 
-    if (req.user.role === 'franchise_owner') {
+    if (req.user.role === 'franchise') {
       if (!req.user.franchiseOwned) {
         return res.status(400).json({
           success: false,

@@ -35,7 +35,7 @@ const staffSchema = new mongoose.Schema(
 
     role: {
       type: String,
-      enum: ['staff', 'accounts', 'franchise_manager', 'admin'],
+      enum: ['staff', 'accounts', 'regional_manager', 'admin'],
       required: true,
     },
 

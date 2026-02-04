@@ -31,8 +31,8 @@ invoiceRouter.post('/:id/accept', requireRole('agent'), acceptInvoice);
 invoiceRouter.post('/:id/escalate', requireRole('agent'), escalateInvoice);
 
 // Staff/Franchise Owner actions
-invoiceRouter.post('/:id/resolve', requireRole('relationship_manager', 'franchise_owner', 'franchise_manager'), resolveEscalation);
-invoiceRouter.post('/:id/approve', requireRole('relationship_manager', 'accounts_manager', 'franchise_owner'), approveInvoice);
-invoiceRouter.post('/:id/reject', requireRole('relationship_manager', 'accounts_manager', 'franchise_owner'), rejectInvoice);
+invoiceRouter.post('/:id/resolve', requireRole('relationship_manager', 'franchise'), resolveEscalation);
+invoiceRouter.post('/:id/approve', requireRole('relationship_manager', 'accounts_manager', 'franchise'), approveInvoice);
+invoiceRouter.post('/:id/reject', requireRole('relationship_manager', 'accounts_manager', 'franchise'), rejectInvoice);
 
 export default invoiceRouter;

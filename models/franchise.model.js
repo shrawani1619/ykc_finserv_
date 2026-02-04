@@ -14,7 +14,7 @@ const franchiseSchema = new mongoose.Schema(
 
     ownerName: String,
 
-    // Owner reference (User with franchise_owner role)
+    // Owner reference (User with franchise role)
     owner: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
@@ -64,6 +64,12 @@ const franchiseSchema = new mongoose.Schema(
       index: true,
     },
 
+    regionalManager: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      index: true,
+    },
+
     // Additional metadata
     address: {
       street: String,
@@ -78,5 +84,6 @@ const franchiseSchema = new mongoose.Schema(
 // Indexes
 franchiseSchema.index({ owner: 1, status: 1 });
 franchiseSchema.index({ status: 1 });
+franchiseSchema.index({ regionalManager: 1 });
 
 export default mongoose.model('Franchise', franchiseSchema);

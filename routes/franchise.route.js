@@ -22,17 +22,17 @@ franchiseRouter.get('/active', getActiveFranchises);
 franchiseRouter.use(authenticate);
 
 // CRUD operations
-franchiseRouter.post('/', requireRole('super_admin', 'franchise_manager', 'relationship_manager'), createFranchise);
+franchiseRouter.post('/', requireRole('super_admin', 'regional_manager', 'relationship_manager'), createFranchise);
 franchiseRouter.get('/', getFranchises);
 franchiseRouter.get('/:id', getFranchiseById);
-franchiseRouter.put('/:id', requireRole('super_admin', 'franchise_manager', 'relationship_manager'), updateFranchise);
-franchiseRouter.delete('/:id', requireRole('super_admin', 'relationship_manager'), deleteFranchise);
-franchiseRouter.put('/:id/status', requireRole('super_admin', 'franchise_manager', 'relationship_manager'), updateFranchiseStatus);
+franchiseRouter.put('/:id', requireRole('super_admin', 'regional_manager', 'relationship_manager'), updateFranchise);
+franchiseRouter.delete('/:id', requireRole('super_admin', 'regional_manager', 'relationship_manager'), deleteFranchise);
+franchiseRouter.put('/:id/status', requireRole('super_admin', 'regional_manager', 'relationship_manager'), updateFranchiseStatus);
 
 // Franchise agents
-franchiseRouter.get('/:id/agents', requireRole('super_admin', 'franchise_manager', 'franchise_owner'), getFranchiseAgents);
+franchiseRouter.get('/:id/agents', requireRole('super_admin', 'regional_manager', 'franchise'), getFranchiseAgents);
 
 // Franchise performance
-franchiseRouter.get('/:id/performance', requireRole('super_admin', 'franchise_manager'), getFranchisePerformance);
+franchiseRouter.get('/:id/performance', requireRole('super_admin', 'regional_manager'), getFranchisePerformance);
 
 export default franchiseRouter;

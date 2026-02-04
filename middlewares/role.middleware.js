@@ -9,7 +9,7 @@ export function requireRole(...roles) {
         });
       }
 
-      // Super admin has access to everything
+      // Super admin has access to everything; regional_manager is scoped in controllers
       if (req.user.role === 'super_admin') {
         return next();
       }
@@ -74,8 +74,8 @@ export function requireOwnershipOrRole(ownerCheckFn) {
         });
       }
 
-      // Super admin and franchise manager have access
-      if (['super_admin', 'franchise_manager'].includes(req.user.role)) {
+      // Super admin has access; regional_manager checked in controller
+      if (req.user.role === 'super_admin') {
         return next();
       }
 

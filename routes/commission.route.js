@@ -20,7 +20,7 @@ commissionRouter.get('/rules', getCommissionRules);
 commissionRouter.post('/calculate/:id', calculateCommission);
 
 // Admin/Manager actions
-commissionRouter.post('/rules', requireRole('super_admin', 'franchise_manager'), createCommissionRule);
-commissionRouter.put('/rules/:id', requireRole('super_admin', 'franchise_manager'), updateCommissionRule);
+commissionRouter.post('/rules', requireRole('super_admin'), createCommissionRule);
+commissionRouter.put('/rules/:id', requireRole('super_admin'), updateCommissionRule);
 
 export default commissionRouter;

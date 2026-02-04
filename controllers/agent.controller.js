@@ -1,4 +1,5 @@
 import User from '../models/user.model.js';
+import { getRegionalManagerFranchiseIds, regionalManagerCanAccessFranchise } from '../utils/regionalScope.js';
 
 /**
  * Create Agent
@@ -10,7 +11,7 @@ export const createAgent = async (req, res, next) => {
       role: 'agent',
     };
 
-    if (req.user.role === 'franchise_owner' && req.user.franchiseOwned) {
+    if (req.user.role === 'franchise' && req.user.franchiseOwned) {
       agentData.franchise = agentData.franchise || req.user.franchiseOwned;
     }
 
@@ -43,8 +44,7 @@ export const getAgents = async (req, res, next) => {
     const query = { role: 'agent' };
 
     // Role-based filtering
-    if (req.user.role === 'franchise_owner') {
-      // Franchise owners should only see agents from their franchise
+    if (req.user.role === 'franchise') {
       if (!req.user.franchiseOwned) {
         return res.status(400).json({
           success: false,
@@ -53,8 +53,13 @@ export const getAgents = async (req, res, next) => {
       }
       query.franchise = req.user.franchiseOwned;
     } else if (req.user.role === 'agent') {
-      // Agents can only see themselves
       query._id = req.user._id;
+    } else if (req.user.role === 'regional_manager') {
+      const franchiseIds = await getRegionalManagerFranchiseIds(req);
+      if (franchiseIds === null || franchiseIds.length === 0) {
+        return res.status(200).json({ success: true, data: [] });
+      }
+      query.franchise = { $in: franchiseIds };
     }
 
     const agents = await User.find(query).select('-password').populate('franchise', 'name');
@@ -92,7 +97,7 @@ export const getAgentById = async (req, res, next) => {
       });
     }
 
-    if (req.user.role === 'franchise_owner') {
+    if (req.user.role === 'franchise') {
       if (!req.user.franchiseOwned) {
         return res.status(400).json({
           success: false,
@@ -103,6 +108,15 @@ export const getAgentById = async (req, res, next) => {
         return res.status(403).json({
           success: false,
           error: 'Access denied. You can only view agents from your franchise.',
+        });
+      }
+    }
+    if (req.user.role === 'regional_manager') {
+      const canAccess = await regionalManagerCanAccessFranchise(req, agent.franchise);
+      if (!canAccess) {
+        return res.status(403).json({
+          success: false,
+          error: 'Access denied. You can only view agents from franchises associated with you.',
         });
       }
     }
@@ -131,7 +145,7 @@ export const updateAgent = async (req, res, next) => {
     }
 
     // Role-based access control
-    if (req.user.role === 'franchise_owner') {
+    if (req.user.role === 'franchise') {
       if (!req.user.franchiseOwned) {
         return res.status(400).json({
           success: false,
@@ -142,6 +156,15 @@ export const updateAgent = async (req, res, next) => {
         return res.status(403).json({
           success: false,
           error: 'Access denied. You can only update agents from your franchise.',
+        });
+      }
+    }
+    if (req.user.role === 'regional_manager') {
+      const canAccess = await regionalManagerCanAccessFranchise(req, existingAgent.franchise);
+      if (!canAccess) {
+        return res.status(403).json({
+          success: false,
+          error: 'Access denied. You can only update agents from franchises associated with you.',
         });
       }
     }
@@ -181,7 +204,7 @@ export const updateAgentStatus = async (req, res, next) => {
     }
 
     // Role-based access control
-    if (req.user.role === 'franchise_owner') {
+    if (req.user.role === 'franchise') {
       if (!req.user.franchiseOwned) {
         return res.status(400).json({
           success: false,
@@ -192,6 +215,15 @@ export const updateAgentStatus = async (req, res, next) => {
         return res.status(403).json({
           success: false,
           error: 'Access denied. You can only update agents from your franchise.',
+        });
+      }
+    }
+    if (req.user.role === 'regional_manager') {
+      const canAccess = await regionalManagerCanAccessFranchise(req, existingAgent.franchise);
+      if (!canAccess) {
+        return res.status(403).json({
+          success: false,
+          error: 'Access denied. You can only update agents from franchises associated with you.',
         });
       }
     }
@@ -217,14 +249,23 @@ export const updateAgentStatus = async (req, res, next) => {
  */
 export const deleteAgent = async (req, res, next) => {
   try {
-    const agent = await User.findOneAndDelete({ _id: req.params.id, role: 'agent' });
-
+    const agent = await User.findOne({ _id: req.params.id, role: 'agent' });
     if (!agent) {
       return res.status(404).json({
         success: false,
         message: 'Agent not found',
       });
     }
+    if (req.user.role === 'regional_manager') {
+      const canAccess = await regionalManagerCanAccessFranchise(req, agent.franchise);
+      if (!canAccess) {
+        return res.status(403).json({
+          success: false,
+          error: 'Access denied. You can only delete agents from franchises associated with you.',
+        });
+      }
+    }
+    await User.findOneAndDelete({ _id: req.params.id, role: 'agent' });
 
     res.status(200).json({
       success: true,

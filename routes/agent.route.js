@@ -5,11 +5,11 @@ import { requireRole } from '../middlewares/role.middleware.js';
 const agentRouter = Router();
 
 agentRouter.post('/', authenticate, createAgent);
-agentRouter.get('/', authenticate, requireRole('super_admin', 'relationship_manager', 'franchise_manager', 'franchise_owner'), getAgents);
-agentRouter.get('/:id', authenticate, requireRole('super_admin', 'relationship_manager', 'franchise_manager', 'franchise_owner'), getAgentById);
-agentRouter.put('/:id', authenticate, requireRole('super_admin', 'relationship_manager', 'franchise_manager', 'franchise_owner'), updateAgent);
-agentRouter.delete('/:id', authenticate, requireRole('super_admin', 'relationship_manager', 'franchise_owner'), deleteAgent);
-agentRouter.put('/:id/status', authenticate, requireRole('super_admin', 'relationship_manager', 'franchise_manager', 'franchise_owner'), updateAgentStatus);
+agentRouter.get('/', authenticate, requireRole('super_admin', 'regional_manager', 'relationship_manager', 'franchise'), getAgents);
+agentRouter.get('/:id', authenticate, requireRole('super_admin', 'regional_manager', 'relationship_manager', 'franchise'), getAgentById);
+agentRouter.put('/:id', authenticate, requireRole('super_admin', 'regional_manager', 'relationship_manager', 'franchise'), updateAgent);
+agentRouter.delete('/:id', authenticate, requireRole('super_admin', 'regional_manager', 'relationship_manager', 'franchise'), deleteAgent);
+agentRouter.put('/:id/status', authenticate, requireRole('super_admin', 'regional_manager', 'relationship_manager', 'franchise'), updateAgentStatus);
 
 
 export default agentRouter;

@@ -250,7 +250,7 @@ export const signup = async (req, res, next) => {
     }
 
     // Validate role
-    const validRoles = ['super_admin', 'relationship_manager', 'franchise_manager', 'franchise_owner', 'agent', 'accounts_manager'];
+    const validRoles = ['super_admin', 'regional_manager', 'relationship_manager', 'franchise', 'agent', 'accounts_manager'];
     if (!validRoles.includes(role)) {
       return res.status(400).json({
         success: false,
@@ -259,7 +259,7 @@ export const signup = async (req, res, next) => {
     }
 
     // Check if franchise is required for this role
-    const rolesRequiringFranchise = ['agent', 'franchise_owner'];
+    const rolesRequiringFranchise = ['agent', 'franchise'];
     if (rolesRequiringFranchise.includes(role) && !franchise) {
       return res.status(400).json({
         success: false,
@@ -309,8 +309,8 @@ export const signup = async (req, res, next) => {
       userData.franchise = franchise;
     }
 
-    // For franchise_owner role, also set franchiseOwned
-    if (role === 'franchise_owner' && franchise) {
+    // For franchise role, also set franchiseOwned
+    if (role === 'franchise' && franchise) {
       userData.franchiseOwned = franchise;
     }
 

@@ -34,19 +34,13 @@ const createUsers = async () => {
         password: 'staff@123',
         role: 'relationship_manager',
       },
-      {
-        name: 'Franchise Manager',
-        email: 'franchisemanager@ykc.com',
-        mobile: '2222222222',
-        password: 'franchisemanager@123',
-        role: 'franchise_manager',
-      },
+
       {
         name: 'Franchise Owner',
         email: 'franchiseowner@ykc.com',
         mobile: '3333333333',
         password: 'franchiseowner@123',
-        role: 'franchise_owner',
+        role: 'franchise',
         franchise: defaultFranchise._id,
         franchiseOwned: defaultFranchise._id,
       },

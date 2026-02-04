@@ -6,6 +6,7 @@ import commissionService from '../services/commission.service.js';
 import invoiceService from '../services/invoice.service.js';
 import emailService from '../services/email.service.js';
 import { getPaginationMeta, trackLeadChanges } from '../utils/helpers.js';
+import { getRegionalManagerFranchiseIds, regionalManagerCanAccessFranchise } from '../utils/regionalScope.js';
 
 /**
  * Create Lead
@@ -14,14 +15,24 @@ export const createLead = async (req, res, next) => {
   try {
     // Generate case number
 
-    // Ensure agent is set from authenticated user if role is agent
     let agentId = req.body.agent;
     let franchiseId = req.body.franchise;
-    
+
     if (req.user.role === 'agent') {
-      // Agents are stored in User model, so use User._id directly
       agentId = req.user._id;
       franchiseId = req.user.franchise;
+    }
+    if (req.user.role === 'regional_manager' && franchiseId) {
+      const franchiseIds = await getRegionalManagerFranchiseIds(req);
+      if (franchiseIds !== null && franchiseIds.length > 0) {
+        const allowed = franchiseIds.some((fid) => fid.toString() === franchiseId.toString());
+        if (!allowed) {
+          return res.status(403).json({
+            success: false,
+            error: 'Access denied. You can only create leads for franchises associated with you.',
+          });
+        }
+      }
     }
 
     const leadData = {
@@ -77,10 +88,10 @@ export const getLeads = async (req, res, next) => {
 
     const query = {};
 
-    // Role-based filtering: agent = own leads, franchise_owner = own + agents' leads, super_admin = all
+    // Role-based filtering: agent = own leads, franchise = own + agents' leads, super_admin = all, regional_manager = their franchises
     if (req.user.role === 'agent') {
       query.agent = req.user._id;
-    } else if (req.user.role === 'franchise_owner') {
+    } else if (req.user.role === 'franchise') {
       if (!req.user.franchiseOwned) {
         return res.status(400).json({
           success: false,
@@ -88,13 +99,22 @@ export const getLeads = async (req, res, next) => {
         });
       }
       query.franchise = req.user.franchiseOwned;
+    } else if (req.user.role === 'regional_manager') {
+      const franchiseIds = await getRegionalManagerFranchiseIds(req);
+      if (franchiseIds === null || franchiseIds.length === 0) {
+        return res.status(200).json({
+          success: true,
+          data: [],
+          pagination: getPaginationMeta(page, limit, 0),
+        });
+      }
+      query.franchise = { $in: franchiseIds };
     }
     // super_admin / relationship_manager: no base filter → all leads; optional filters below
 
     if (status) query.status = status;
     if (verificationStatus) query.verificationStatus = verificationStatus;
     if (bankId) query.bank = bankId;
-    // Optional scope filters only for roles that can see all leads
     const canFilterScope = ['super_admin', 'relationship_manager'].includes(req.user.role);
     if (canFilterScope) {
       if (agentId) query.agent = agentId;
@@ -151,7 +171,7 @@ export const getLeadById = async (req, res, next) => {
       });
     }
 
-    if (req.user.role === 'franchise_owner') {
+    if (req.user.role === 'franchise') {
       if (!req.user.franchiseOwned) {
         return res.status(400).json({
           success: false,
@@ -162,6 +182,15 @@ export const getLeadById = async (req, res, next) => {
         return res.status(403).json({
           success: false,
           error: 'Access denied. You can only view leads from your franchise.',
+        });
+      }
+    }
+    if (req.user.role === 'regional_manager') {
+      const canAccess = await regionalManagerCanAccessFranchise(req, lead.franchise);
+      if (!canAccess) {
+        return res.status(403).json({
+          success: false,
+          error: 'Access denied. You can only view leads from franchises associated with you.',
         });
       }
     }
@@ -204,7 +233,7 @@ export const updateLead = async (req, res, next) => {
       });
     }
 
-    if (req.user.role === 'franchise_owner') {
+    if (req.user.role === 'franchise') {
       if (!req.user.franchiseOwned) {
         return res.status(400).json({
           success: false,
@@ -215,6 +244,15 @@ export const updateLead = async (req, res, next) => {
         return res.status(403).json({
           success: false,
           error: 'Access denied. You can only update leads from your franchise.',
+        });
+      }
+    }
+    if (req.user.role === 'regional_manager') {
+      const canAccess = await regionalManagerCanAccessFranchise(req, existingLead.franchise);
+      if (!canAccess) {
+        return res.status(403).json({
+          success: false,
+          error: 'Access denied. You can only update leads from franchises associated with you.',
         });
       }
     }
@@ -297,7 +335,7 @@ export const updateLeadStatus = async (req, res, next) => {
       });
     }
 
-    if (req.user.role === 'franchise_owner') {
+    if (req.user.role === 'franchise') {
       if (!req.user.franchiseOwned) {
         return res.status(400).json({
           success: false,
@@ -308,6 +346,15 @@ export const updateLeadStatus = async (req, res, next) => {
         return res.status(403).json({
           success: false,
           error: 'Access denied. You can only update leads from your franchise.',
+        });
+      }
+    }
+    if (req.user.role === 'regional_manager') {
+      const canAccess = await regionalManagerCanAccessFranchise(req, existingLead.franchise);
+      if (!canAccess) {
+        return res.status(403).json({
+          success: false,
+          error: 'Access denied. You can only update leads from franchises associated with you.',
         });
       }
     }
@@ -420,8 +467,7 @@ export const verifyLead = async (req, res, next) => {
       });
     }
 
-    // Role-based access control for franchise owners
-    if (req.user.role === 'franchise_owner') {
+    if (req.user.role === 'franchise') {
       if (!req.user.franchiseOwned) {
         return res.status(400).json({
           success: false,
@@ -432,6 +478,15 @@ export const verifyLead = async (req, res, next) => {
         return res.status(403).json({
           success: false,
           error: 'Access denied. You can only verify leads from your franchise.',
+        });
+      }
+    }
+    if (req.user.role === 'regional_manager') {
+      const canAccess = await regionalManagerCanAccessFranchise(req, existingLead.franchise);
+      if (!canAccess) {
+        return res.status(403).json({
+          success: false,
+          error: 'Access denied. You can only verify leads from franchises associated with you.',
         });
       }
     }
@@ -567,14 +622,23 @@ export const uploadLeadDocument = async (req, res, next) => {
  */
 export const deleteLead = async (req, res, next) => {
   try {
-    const lead = await Lead.findByIdAndDelete(req.params.id);
-
+    const lead = await Lead.findById(req.params.id);
     if (!lead) {
       return res.status(404).json({
         success: false,
         message: 'Lead not found',
       });
     }
+    if (req.user.role === 'regional_manager') {
+      const canAccess = await regionalManagerCanAccessFranchise(req, lead.franchise);
+      if (!canAccess) {
+        return res.status(403).json({
+          success: false,
+          error: 'Access denied. You can only delete leads from franchises associated with you.',
+        });
+      }
+    }
+    await Lead.findByIdAndDelete(req.params.id);
 
     res.status(200).json({
       success: true,
@@ -610,7 +674,7 @@ export const getLeadHistory = async (req, res, next) => {
       });
     }
 
-    if (req.user.role === 'franchise_owner') {
+    if (req.user.role === 'franchise') {
       if (!req.user.franchiseOwned) {
         return res.status(400).json({
           success: false,
@@ -624,8 +688,16 @@ export const getLeadHistory = async (req, res, next) => {
         });
       }
     }
+    if (req.user.role === 'regional_manager') {
+      const canAccess = await regionalManagerCanAccessFranchise(req, lead.franchise);
+      if (!canAccess) {
+        return res.status(403).json({
+          success: false,
+          error: 'Access denied. You can only view history of leads from franchises associated with you.',
+        });
+      }
+    }
 
-    // Agents can view history of their own leads, admins and franchise owners can view all
     if (req.user.role === 'agent' && lead.agent.toString() !== req.user._id.toString()) {
       return res.status(403).json({
         success: false,

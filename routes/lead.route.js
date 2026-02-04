@@ -24,11 +24,11 @@ leadRouter.post('/', createLead);
 leadRouter.get('/', getLeads);
 leadRouter.get('/:id', getLeadById);
 leadRouter.put('/:id', updateLead);
-leadRouter.delete('/:id', requireRole('super_admin', 'relationship_manager', 'franchise_owner'), deleteLead);
+leadRouter.delete('/:id', requireRole('super_admin', 'regional_manager', 'relationship_manager', 'franchise'), deleteLead);
 leadRouter.put('/:id/status', updateLeadStatus);
 
 // Verification (Staff/Franchise Owner)
-leadRouter.post('/:id/verify', requireRole('relationship_manager', 'franchise_owner'), verifyLead);
+leadRouter.post('/:id/verify', requireRole('regional_manager', 'relationship_manager', 'franchise'), verifyLead);
 
 // Document management
 leadRouter.get('/:id/documents', getLeadDocuments);

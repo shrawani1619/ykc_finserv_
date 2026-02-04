@@ -5,6 +5,7 @@ import User from '../models/user.model.js';
 import Franchise from '../models/franchise.model.js';
 import EmailLog from '../models/emailLog.model.js';
 import mongoose from 'mongoose';
+import { getRegionalManagerFranchiseIds } from '../utils/regionalScope.js';
 
 /**
  * Get agent dashboard data
@@ -194,35 +195,48 @@ export const getAccountsDashboard = async (req, res, next) => {
 };
 
 /**
- * Get admin dashboard data
+ * Get admin dashboard data (scoped by franchises for regional_manager)
  */
 export const getAdminDashboard = async (req, res, next) => {
   try {
-    // Total statistics
-    const totalLeads = await Lead.countDocuments();
-    const totalAgents = await User.countDocuments({ role: 'agent', status: 'active' });
-    const totalFranchises = await Franchise.countDocuments({ status: 'active' });
-    const totalInvoices = await Invoice.countDocuments();
+    const isRegionalManager = req.user.role === 'regional_manager';
+    const franchiseIds = isRegionalManager ? await getRegionalManagerFranchiseIds(req) : null;
+    const franchiseMatch =
+      franchiseIds?.length ? { franchise: { $in: franchiseIds } } : isRegionalManager ? { _id: null } : {};
 
-    // Revenue statistics
+    const totalLeads = await Lead.countDocuments(franchiseMatch);
+    const totalAgents = await User.countDocuments({
+      role: 'agent',
+      status: 'active',
+      ...(franchiseMatch.franchise && { franchise: franchiseMatch.franchise }),
+      ...(isRegionalManager && !franchiseIds?.length && { _id: null }),
+    });
+    const totalFranchises = isRegionalManager
+      ? await Franchise.countDocuments({ status: 'active', regionalManager: req.user._id })
+      : await Franchise.countDocuments({ status: 'active' });
+    const totalInvoices = franchiseMatch.franchise
+      ? await Invoice.countDocuments({ franchise: franchiseMatch.franchise })
+      : await Invoice.countDocuments();
+
     const commissionAggregation = await Invoice.aggregate([
+      ...(franchiseMatch.franchise ? [{ $match: { franchise: { $in: franchiseIds } } }] : []),
       { $group: { _id: null, total: { $sum: '$commissionAmount' } } },
     ]);
     const totalCommission = commissionAggregation[0]?.total || 0;
 
     const payoutAggregation = await Payout.aggregate([
-      { $match: { status: 'paid' } },
+      { $match: { status: 'paid', ...(franchiseMatch.franchise && { franchise: { $in: franchiseIds } }) } },
       { $group: { _id: null, total: { $sum: '$netPayable' } } },
     ]);
     const totalPayouts = payoutAggregation[0]?.total || 0;
 
-    // Lead status breakdown
     const leadStatusBreakdown = await Lead.aggregate([
+      ...(franchiseMatch.franchise ? [{ $match: { franchise: { $in: franchiseIds } } }] : []),
       { $group: { _id: '$status', count: { $sum: 1 } } },
     ]);
 
-    // Loan distribution (by loan type, with count and percentage)
     const loanDistributionAgg = await Lead.aggregate([
+      ...(franchiseMatch.franchise ? [{ $match: { franchise: { $in: franchiseIds } } }] : []),
       { $group: { _id: '$loanType', count: { $sum: 1 } } },
       { $sort: { count: -1 } },
     ]);
@@ -249,12 +263,11 @@ export const getAdminDashboard = async (req, res, next) => {
       value: idx === 0 ? item.value + (100 - sumPct) : item.value,
     }));
 
-    // Lead conversion funnel: Logged, Sanctioned, Disbursed, Completed, Rejected
-    const loggedCount = await Lead.countDocuments({ status: 'logged' });
-    const sanctionedCount = await Lead.countDocuments({ status: 'sanctioned' });
-    const disbursedCount = await Lead.countDocuments({ status: { $in: ['partial_disbursed', 'disbursed'] } });
-    const completedCount = await Lead.countDocuments({ status: 'completed' });
-    const rejectedCount = await Lead.countDocuments({ status: 'rejected' });
+    const loggedCount = await Lead.countDocuments({ ...franchiseMatch, status: 'logged' });
+    const sanctionedCount = await Lead.countDocuments({ ...franchiseMatch, status: 'sanctioned' });
+    const disbursedCount = await Lead.countDocuments({ ...franchiseMatch, status: { $in: ['partial_disbursed', 'disbursed'] } });
+    const completedCount = await Lead.countDocuments({ ...franchiseMatch, status: 'completed' });
+    const rejectedCount = await Lead.countDocuments({ ...franchiseMatch, status: 'rejected' });
     const leadConversionFunnel = [
       { stage: 'Logged', value: loggedCount, fill: '#f97316' },
       { stage: 'Sanctioned', value: sanctionedCount, fill: '#84cc16' },
@@ -263,33 +276,42 @@ export const getAdminDashboard = async (req, res, next) => {
       { stage: 'Rejected', value: rejectedCount, fill: '#b91c1c' },
     ];
 
-    // Recent related lists
-    const recentLeads = await Lead.find()
+    const recentLeads = await Lead.find(franchiseMatch)
       .populate('agent', 'name email')
       .populate('franchise', 'name')
       .populate('bank', 'name')
       .sort({ createdAt: -1 })
       .limit(5);
 
-    const recentAgents = await User.find({ role: 'agent' })
+    const recentAgents = await User.find({
+      role: 'agent',
+      ...(franchiseMatch.franchise && { franchise: franchiseMatch.franchise }),
+    })
       .select('name email mobile status createdAt')
       .populate('franchise', 'name')
       .sort({ createdAt: -1 })
       .limit(5);
 
-    const recentFranchises = await Franchise.find()
+    const recentFranchisesQuery = isRegionalManager
+      ? { regionalManager: req.user._id }
+      : {};
+    const recentFranchises = await Franchise.find(recentFranchisesQuery)
       .select('name ownerName email mobile status createdAt')
       .sort({ createdAt: -1 })
       .limit(5);
 
-    const recentInvoices = await Invoice.find()
+    const recentInvoices = await Invoice.find(
+      franchiseMatch.franchise ? { franchise: franchiseMatch.franchise } : {}
+    )
       .populate('agent', 'name email')
       .populate('franchise', 'name')
       .select('invoiceNumber amount commissionAmount status createdAt')
       .sort({ createdAt: -1 })
       .limit(5);
 
-    const recentPayouts = await Payout.find()
+    const recentPayouts = await Payout.find(
+      franchiseMatch.franchise ? { franchise: franchiseMatch.franchise } : {}
+    )
       .populate('agent', 'name email')
       .populate('franchise', 'name')
       .select('payoutNumber netPayable status createdAt')
@@ -308,16 +330,15 @@ export const getAdminDashboard = async (req, res, next) => {
     const openedEmails = Math.floor(sentEmails * 0.49); // ~49% open rate estimate
     const clickedEmails = Math.floor(sentEmails * 0.25); // ~25% click rate estimate
 
-    // Visitor/Lead Data (Monthly aggregation for last 7 months)
     const sevenMonthsAgo = new Date();
     sevenMonthsAgo.setMonth(sevenMonthsAgo.getMonth() - 7);
-    
+
+    const visitorDataMatch = {
+      createdAt: { $gte: sevenMonthsAgo },
+      ...(franchiseMatch.franchise && { franchise: { $in: franchiseIds } }),
+    };
     const visitorData = await Lead.aggregate([
-      {
-        $match: {
-          createdAt: { $gte: sevenMonthsAgo }
-        }
-      },
+      { $match: visitorDataMatch },
       {
         $group: {
           _id: {
@@ -377,21 +398,14 @@ export const getAdminDashboard = async (req, res, next) => {
     const previousPeriodStart = new Date(sevenMonthsAgo);
     previousPeriodStart.setMonth(previousPeriodStart.getMonth() - 7);
     
-    const previousPeriodLeads = await Lead.countDocuments({
-      createdAt: { $gte: previousPeriodStart, $lt: sevenMonthsAgo }
-    });
-    const previousPeriodCompleted = await Lead.countDocuments({
+    const prevMatch = {
       createdAt: { $gte: previousPeriodStart, $lt: sevenMonthsAgo },
-      status: 'completed'
-    });
-    const previousPeriodVerified = await Lead.countDocuments({
-      createdAt: { $gte: previousPeriodStart, $lt: sevenMonthsAgo },
-      verificationStatus: 'verified'
-    });
-    const previousPeriodActive = await Lead.countDocuments({
-      createdAt: { $gte: previousPeriodStart, $lt: sevenMonthsAgo },
-      status: 'active'
-    });
+      ...(franchiseMatch.franchise && { franchise: { $in: franchiseIds } }),
+    };
+    const previousPeriodLeads = await Lead.countDocuments(prevMatch);
+    const previousPeriodCompleted = await Lead.countDocuments({ ...prevMatch, status: 'completed' });
+    const previousPeriodVerified = await Lead.countDocuments({ ...prevMatch, verificationStatus: 'verified' });
+    const previousPeriodActive = await Lead.countDocuments({ ...prevMatch, status: 'active' });
 
     const prevBounceRate = previousPeriodLeads > 0
       ? ((previousPeriodLeads - previousPeriodCompleted) / previousPeriodLeads * 100).toFixed(2)

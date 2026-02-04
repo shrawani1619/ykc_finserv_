@@ -6,13 +6,14 @@ import Payout from '../models/payout.model.js';
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 import { getPaginationMeta } from '../utils/helpers.js';
+import { getRegionalManagerFranchiseIds, regionalManagerCanAccessFranchise } from '../utils/regionalScope.js';
 
 /**
- * Create Franchise (and franchise_owner User for login)
+ * Create Franchise (and franchise User for login)
  */
 export const createFranchise = async (req, res, next) => {
   try {
-    const { name, ownerName, email, mobile, password, address, status, commissionStructure } = req.body;
+    const { name, ownerName, email, mobile, password, address, status, commissionStructure, regionalManager } = req.body;
 
     if (!name?.trim()) {
       return res.status(400).json({
@@ -55,6 +56,20 @@ export const createFranchise = async (req, res, next) => {
       });
     }
 
+    let allowedRegionalManager = regionalManager;
+    if (regionalManager && req.user.role !== 'super_admin') {
+      allowedRegionalManager = undefined;
+    }
+    if (allowedRegionalManager) {
+      const rm = await User.findById(allowedRegionalManager);
+      if (!rm || rm.role !== 'regional_manager') {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid regional manager. Select a user with regional_manager role.',
+        });
+      }
+    }
+
     const franchisePayload = {
       name: name.trim(),
       ownerName: ownerName.trim(),
@@ -63,7 +78,11 @@ export const createFranchise = async (req, res, next) => {
       status: status || 'active',
       address: address || {},
       commissionStructure: commissionStructure || {},
+      ...(allowedRegionalManager && { regionalManager: allowedRegionalManager }),
     };
+    if (req.user.role === 'regional_manager') {
+      franchisePayload.regionalManager = req.user._id;
+    }
     const franchise = await Franchise.create(franchisePayload);
 
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -72,7 +91,7 @@ export const createFranchise = async (req, res, next) => {
       email: franchise.email,
       mobile: franchise.mobile,
       password: hashedPassword,
-      role: 'franchise_owner',
+      role: 'franchise',
       franchise: franchise._id,
       franchiseOwned: franchise._id,
       status: 'active',
@@ -82,7 +101,8 @@ export const createFranchise = async (req, res, next) => {
     await franchise.save();
 
     const populatedFranchise = await Franchise.findById(franchise._id)
-      .populate('owner', 'name email');
+      .populate('owner', 'name email')
+      .populate('regionalManager', 'name email');
 
     console.log('✅ Franchise created successfully:', {
       id: franchise._id,
@@ -112,9 +132,13 @@ export const getFranchises = async (req, res, next) => {
 
     const query = {};
     if (status) query.status = status;
+    if (req.user.role === 'regional_manager') {
+      query.regionalManager = req.user._id;
+    }
 
     const franchises = await Franchise.find(query)
       .populate('owner', 'name email')
+      .populate('regionalManager', 'name email')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit));
@@ -156,13 +180,22 @@ export const getActiveFranchises = async (req, res, next) => {
 export const getFranchiseById = async (req, res, next) => {
   try {
     const franchise = await Franchise.findById(req.params.id)
-      .populate('owner', 'name email');
+      .populate('owner', 'name email')
+      .populate('regionalManager', 'name email');
 
     if (!franchise) {
       return res.status(404).json({
         success: false,
         message: 'Franchise not found',
       });
+    }
+    if (req.user.role === 'regional_manager') {
+      if (franchise.regionalManager?.toString() !== req.user._id.toString()) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You can only view franchises associated with you.',
+        });
+      }
     }
 
     res.status(200).json({
@@ -179,10 +212,38 @@ export const getFranchiseById = async (req, res, next) => {
  */
 export const updateFranchise = async (req, res, next) => {
   try {
-    const franchise = await Franchise.findByIdAndUpdate(req.params.id, req.body, {
+    if (req.user.role === 'regional_manager') {
+      const canAccess = await regionalManagerCanAccessFranchise(req, req.params.id);
+      if (!canAccess) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You can only update franchises associated with you.',
+        });
+      }
+    }
+    const updatePayload = { ...req.body };
+    if (req.user.role !== 'super_admin') {
+      delete updatePayload.regionalManager;
+    }
+    if (updatePayload.regionalManager !== undefined) {
+      if (!updatePayload.regionalManager) {
+        updatePayload.regionalManager = null;
+      } else {
+        const rm = await User.findById(updatePayload.regionalManager);
+        if (!rm || rm.role !== 'regional_manager') {
+          return res.status(400).json({
+            success: false,
+            message: 'Invalid regional manager. Select a user with regional_manager role.',
+          });
+        }
+      }
+    }
+    const franchise = await Franchise.findByIdAndUpdate(req.params.id, updatePayload, {
       new: true,
       runValidators: true,
-    }).populate('owner', 'name email');
+    })
+      .populate('owner', 'name email')
+      .populate('regionalManager', 'name email');
 
     if (!franchise) {
       return res.status(404).json({
@@ -206,6 +267,15 @@ export const updateFranchise = async (req, res, next) => {
  */
 export const updateFranchiseStatus = async (req, res, next) => {
   try {
+    if (req.user.role === 'regional_manager') {
+      const canAccess = await regionalManagerCanAccessFranchise(req, req.params.id);
+      if (!canAccess) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You can only update franchises associated with you.',
+        });
+      }
+    }
     const { status } = req.body;
 
     const franchise = await Franchise.findByIdAndUpdate(
@@ -236,6 +306,15 @@ export const updateFranchiseStatus = async (req, res, next) => {
  */
 export const getFranchiseAgents = async (req, res, next) => {
   try {
+    if (req.user.role === 'regional_manager') {
+      const canAccess = await regionalManagerCanAccessFranchise(req, req.params.id);
+      if (!canAccess) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You can only view agents of franchises associated with you.',
+        });
+      }
+    }
     const { page = 1, limit = 10, status } = req.query;
     const skip = (page - 1) * limit;
 
@@ -269,6 +348,15 @@ export const getFranchiseAgents = async (req, res, next) => {
  */
 export const getFranchisePerformance = async (req, res, next) => {
   try {
+    if (req.user.role === 'regional_manager') {
+      const canAccess = await regionalManagerCanAccessFranchise(req, req.params.id);
+      if (!canAccess) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You can only view performance of franchises associated with you.',
+        });
+      }
+    }
     const franchiseId = new mongoose.Types.ObjectId(req.params.id);
 
     // Get total agents
@@ -326,6 +414,15 @@ export const getFranchisePerformance = async (req, res, next) => {
  */
 export const deleteFranchise = async (req, res, next) => {
   try {
+    if (req.user.role === 'regional_manager') {
+      const canAccess = await regionalManagerCanAccessFranchise(req, req.params.id);
+      if (!canAccess) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You can only delete franchises associated with you.',
+        });
+      }
+    }
     const franchise = await Franchise.findByIdAndDelete(req.params.id);
 
     if (!franchise) {
