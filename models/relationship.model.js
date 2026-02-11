@@ -74,6 +74,7 @@ const relationshipSchema = new mongoose.Schema(
     bankDetails: {
       accountHolderName: String,
       accountNumber: String,
+      branch: String,
       ifsc: String,
       bankName: String,
     },

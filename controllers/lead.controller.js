@@ -2,6 +2,8 @@ import mongoose from 'mongoose';
 import Lead from '../models/lead.model.js';
 import LeadHistory from '../models/leadHistory.model.js';
 import User from '../models/user.model.js';
+import Staff from '../models/staff.model.js';
+import BankManager from '../models/bankManager.model.js';
 import commissionService from '../services/commission.service.js';
 import invoiceService from '../services/invoice.service.js';
 import emailService from '../services/email.service.js';
@@ -91,6 +93,94 @@ export const createLead = async (req, res, next) => {
     }
 
     console.log('🔍 DEBUG: Creating lead with agent:', leadData.agent);
+
+    // Ensure SM/BM exists (prefer BankManager for bank contacts; fallback to Staff)
+    try {
+      if (!leadData.smBm && (leadData.smBmEmail || leadData.smBmMobile || req.body.smBmName)) {
+        let existing = null;
+
+        // If bank provided, prefer BankManager collection (they don't need login)
+        if (leadData.bank) {
+          if (leadData.smBmEmail) {
+            existing = await BankManager.findOne({ email: leadData.smBmEmail.toLowerCase(), bank: leadData.bank });
+          }
+          if (!existing && leadData.smBmMobile) {
+            existing = await BankManager.findOne({ mobile: leadData.smBmMobile, bank: leadData.bank });
+          }
+
+          if (existing) {
+            leadData.smBm = existing._id;
+            leadData.smBmModel = 'BankManager';
+          } else {
+            // Create new BankManager for contact purposes
+            const name = req.body.smBmName || (leadData.smBmEmail ? leadData.smBmEmail.split('@')[0].replace(/\./g, ' ') : 'SM/BM');
+            const newBM = await BankManager.create({
+              name,
+              email: leadData.smBmEmail ? leadData.smBmEmail.toLowerCase() : undefined,
+              mobile: leadData.smBmMobile || undefined,
+              role: 'bm',
+              bank: leadData.bank,
+              status: 'active',
+            });
+            leadData.smBm = newBM._id;
+            leadData.smBmModel = 'BankManager';
+          }
+        } else {
+          // No bank specified -> fallback to creating Staff (login-able)
+          if (leadData.smBmEmail) {
+            existing = await Staff.findOne({ email: leadData.smBmEmail.toLowerCase() });
+          }
+          if (!existing && leadData.smBmMobile) {
+            existing = await Staff.findOne({ mobile: leadData.smBmMobile });
+          }
+
+          if (existing) {
+            leadData.smBm = existing._id;
+            leadData.smBmModel = 'Staff';
+          } else {
+            const name = req.body.smBmName || (leadData.smBmEmail ? leadData.smBmEmail.split('@')[0].replace(/\./g, ' ') : 'SM/BM');
+            const newStaff = await Staff.create({
+              name,
+              email: leadData.smBmEmail ? leadData.smBmEmail.toLowerCase() : undefined,
+              mobile: leadData.smBmMobile || undefined,
+              password: 'Default@123',
+              role: 'staff',
+              status: 'active',
+            });
+            leadData.smBm = newStaff._id;
+            leadData.smBmModel = 'Staff';
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Unable to ensure SM/BM exists:', err);
+    }
+
+    // Ensure ASM exists as a BankManager (contact) when bank provided and ASM details present
+    try {
+      if (leadData.bank && (leadData.asmEmail || leadData.asmMobile || req.body.asmName)) {
+        let existingAsm = null;
+        if (leadData.asmEmail) {
+          existingAsm = await BankManager.findOne({ email: leadData.asmEmail.toLowerCase(), bank: leadData.bank });
+        }
+        if (!existingAsm && leadData.asmMobile) {
+          existingAsm = await BankManager.findOne({ mobile: leadData.asmMobile, bank: leadData.bank });
+        }
+        if (!existingAsm) {
+          const asmName = req.body.asmName || (leadData.asmEmail ? leadData.asmEmail.split('@')[0].replace(/\./g, ' ') : 'ASM');
+          await BankManager.create({
+            name: asmName,
+            email: leadData.asmEmail ? leadData.asmEmail.toLowerCase() : undefined,
+            mobile: leadData.asmMobile || undefined,
+            role: 'asm',
+            bank: leadData.bank,
+            status: 'active',
+          });
+        }
+      }
+    } catch (err) {
+      console.warn('Unable to ensure ASM BankManager exists:', err);
+    }
 
     const lead = await Lead.create(leadData);
 

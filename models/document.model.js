@@ -51,6 +51,30 @@ const documentSchema = new mongoose.Schema(
       required: true,
     },
 
+    // Storage provider metadata (local filesystem or cloud provider)
+    provider: {
+      type: String,
+      enum: ['local', 'cloudinary'],
+      default: 'local',
+      index: true,
+    },
+
+    // Publicly accessible URL for the file (if uploaded to cloud)
+    url: {
+      type: String,
+    },
+
+    // Cloud provider specific public id (e.g., Cloudinary public_id)
+    publicId: {
+      type: String,
+      index: true,
+    },
+
+    // Resource type returned by cloud provider (image, raw, auto, etc.)
+    resourceType: {
+      type: String,
+    },
+
     // Verification status
     verificationStatus: {
       type: String,

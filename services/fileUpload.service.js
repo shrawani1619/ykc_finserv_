@@ -4,6 +4,8 @@ import fs from 'fs/promises';
 import { fileURLToPath } from 'url';
 import Document from '../models/document.model.js';
 import { sanitizeFilename, validateFileType } from '../utils/helpers.js';
+import { v2 as cloudinary } from 'cloudinary';
+import streamifier from 'streamifier';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -13,6 +15,7 @@ const ALLOWED_FILE_TYPES = [
   'application/pdf',
   'image/jpeg',
   'image/jpg',
+  'image/webp',
   'image/png',
   'application/msword',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -29,25 +32,8 @@ const MAX_FILE_SIZE = 10 * 1024 * 1024;
  */
 class FileUploadService {
   constructor() {
-    // Configure multer storage
-    this.storage = multer.diskStorage({
-      destination: async (req, file, cb) => {
-        try {
-          const uploadsDir = path.join(__dirname, '../uploads/documents');
-          await fs.mkdir(uploadsDir, { recursive: true });
-          cb(null, uploadsDir);
-        } catch (error) {
-          cb(error);
-        }
-      },
-      filename: (req, file, cb) => {
-        const sanitized = sanitizeFilename(file.originalname);
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        const ext = path.extname(sanitized);
-        const nameWithoutExt = path.basename(sanitized, ext);
-        cb(null, `${nameWithoutExt}-${uniqueSuffix}${ext}`);
-      },
-    });
+    // Use memory storage so we can upload to Cloudinary (or fallback to disk)
+    this.storage = multer.memoryStorage();
 
     // Configure multer upload
     this.upload = multer({
@@ -75,6 +61,14 @@ class FileUploadService {
   }
 
   /**
+   * Accept any file fields (useful when clients send multiple named file inputs)
+   * WARNING: returns all files in req.files array; controller should handle selection.
+   */
+  getAnyUploadMiddleware() {
+    return this.upload.any();
+  }
+
+  /**
    * Get multer upload middleware for multiple files
    * @param {String} fieldName - Form field name
    * @param {Number} maxCount - Maximum number of files
@@ -82,6 +76,110 @@ class FileUploadService {
    */
   getMultipleUploadMiddleware(fieldName = 'files', maxCount = 10) {
     return this.upload.array(fieldName, maxCount);
+  }
+
+  /**
+   * Process uploaded file: upload to Cloudinary (if configured) or save to disk,
+   * then persist document metadata to database.
+   *
+   * @param {Object} file - multer file object (memory buffer)
+   * @param {Object} meta - metadata { entityType, entityId, documentType, description, uploadedBy }
+   * @returns {Promise<Object>} Created Document
+   */
+  async processUploadedFile(file, meta) {
+    if (!file) throw new Error('No file provided');
+
+    // Configure Cloudinary if env vars available
+    const { CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET } = process.env;
+    let uploadResult = null;
+    let provider = 'local';
+    let finalFilePath = null;
+    let fileName = null;
+    let fileSize = file.size;
+
+    if (CLOUDINARY_CLOUD_NAME && CLOUDINARY_API_KEY && CLOUDINARY_API_SECRET) {
+      try {
+        cloudinary.config({
+          cloud_name: CLOUDINARY_CLOUD_NAME,
+          api_key: CLOUDINARY_API_KEY,
+          api_secret: CLOUDINARY_API_SECRET,
+        });
+
+        // upload buffer via upload_stream using streamifier for reliability
+        uploadResult = await new Promise((resolve, reject) => {
+          const stream = cloudinary.uploader.upload_stream(
+            { resource_type: 'auto', folder: 'documents' },
+            (error, result) => {
+              if (error) {
+                console.error('Cloudinary upload callback error:', error && error.stack ? error.stack : error);
+                return reject(error);
+              }
+              resolve(result);
+            }
+          );
+          // Use streamifier to create a readable stream from the buffer and pipe it
+          streamifier.createReadStream(file.buffer).pipe(stream);
+        });
+
+        console.log('Cloudinary upload successful:', {
+          public_id: uploadResult.public_id,
+          url: uploadResult.secure_url,
+          bytes: uploadResult.bytes,
+        });
+
+        provider = 'cloudinary';
+        finalFilePath = uploadResult.secure_url;
+        fileName = uploadResult.public_id;
+        fileSize = uploadResult.bytes || file.size;
+      } catch (error) {
+        // If cloud upload fails, fallback to local disk storage
+        console.error('Cloudinary upload failed, falling back to local. Error:', error.message);
+        uploadResult = null;
+      }
+    }
+
+    // Fallback to local disk storage if cloud not used or failed
+    if (!uploadResult) {
+      const uploadsDir = path.join(__dirname, '../uploads/documents');
+      await fs.mkdir(uploadsDir, { recursive: true });
+      const sanitized = sanitizeFilename(file.originalname);
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+      const ext = path.extname(sanitized);
+      const nameWithoutExt = path.basename(sanitized, ext);
+      fileName = `${nameWithoutExt}-${uniqueSuffix}${ext}`;
+      finalFilePath = path.join(uploadsDir, fileName);
+      await fs.writeFile(finalFilePath, file.buffer);
+      provider = 'local';
+    }
+
+    // Prepare document data for DB
+    const documentData = {
+      entityType: meta.entityType,
+      entityId: meta.entityId,
+      documentType: meta.documentType,
+      fileName: fileName,
+      originalFileName: file.originalname,
+      filePath: finalFilePath,
+      fileSize: fileSize,
+      mimeType: file.mimetype,
+      uploadedBy: meta.uploadedBy,
+      description: meta.description || '',
+      provider,
+    };
+
+    if (provider === 'cloudinary' && uploadResult) {
+      documentData.url = uploadResult.secure_url;
+      documentData.publicId = uploadResult.public_id;
+      documentData.resourceType = uploadResult.resource_type;
+    }
+
+    // Save document metadata
+    const document = await Document.create({
+      ...documentData,
+      verificationStatus: 'pending',
+    });
+
+    return document;
   }
 
   /**

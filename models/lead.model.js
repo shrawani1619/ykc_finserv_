@@ -29,8 +29,12 @@ const leadSchema = new mongoose.Schema(
       type: Number,
       required: true,
     },
-
-    loanAccountNo: String,
+    
+    loanAccountNo: {
+      type: String,
+      required: true,
+      index: true,
+    },
 
     // References
     agent: {
@@ -149,17 +153,28 @@ const leadSchema = new mongoose.Schema(
     bankResponseReceivedAt: Date,
 
     // Customer Details Form
-    customerName: String,
-    
-    smBm: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Staff',
+    customerName: {
+      type: String,
+      required: true,
+      trim: true,
       index: true,
     },
     
+    // SM/BM can be either a Staff (login-able) or a BankManager (contact-only).
+    // Use polymorphic ref to support both.
+    smBm: {
+      type: mongoose.Schema.Types.ObjectId,
+      refPath: 'smBmModel',
+      index: true,
+    },
+    smBmModel: {
+      type: String,
+      enum: ['Staff', 'BankManager'],
+      index: true,
+    },
     smBmEmail: String,
     smBmMobile: String,
-    
+
     asmName: String,
     asmEmail: String,
     asmMobile: String,
