@@ -490,3 +490,199 @@ export const deleteAgent = async (req, res, next) => {
     next(error);
   }
 };
+
+/**
+ * Create Sub-Agent (for agents)
+ */
+export const createSubAgent = async (req, res, next) => {
+  try {
+    // Only agents can create sub-agents
+    if (req.user.role !== 'agent') {
+      return res.status(403).json({
+        success: false,
+        error: 'Only agents can create sub-agents',
+      });
+    }
+
+    const subAgentData = {
+      ...req.body,
+      role: 'agent',
+      parentAgent: req.user._id, // Set parent agent to current logged-in agent
+      // Inherit managedBy from parent agent
+      managedBy: req.user.managedBy,
+      managedByModel: req.user.managedByModel,
+    };
+
+    const subAgent = await User.create(subAgentData);
+
+    const subAgentWithParent = await User.findById(subAgent._id)
+      .select('-password')
+      .populate('parentAgent', 'name email')
+      .populate('managedBy', 'name');
+
+    res.status(201).json({
+      success: true,
+      data: subAgentWithParent,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get All Sub-Agents (for current agent)
+ */
+export const getSubAgents = async (req, res, next) => {
+  try {
+    // Only agents can view their sub-agents
+    if (req.user.role !== 'agent') {
+      return res.status(403).json({
+        success: false,
+        error: 'Only agents can view sub-agents',
+      });
+    }
+
+    const subAgents = await User.find({ parentAgent: req.user._id, role: 'agent' })
+      .select('-password')
+      .populate('parentAgent', 'name email')
+      .populate('managedBy', 'name')
+      .sort({ createdAt: -1 });
+
+    res.status(200).json({
+      success: true,
+      data: subAgents,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get Sub-Agent By ID
+ */
+export const getSubAgentById = async (req, res, next) => {
+  try {
+    // Only agents can view their sub-agents
+    if (req.user.role !== 'agent') {
+      return res.status(403).json({
+        success: false,
+        error: 'Only agents can view sub-agents',
+      });
+    }
+
+    const subAgent = await User.findOne({ 
+      _id: req.params.id, 
+      parentAgent: req.user._id, 
+      role: 'agent' 
+    })
+      .select('-password')
+      .populate('parentAgent', 'name email')
+      .populate('managedBy', 'name');
+
+    if (!subAgent) {
+      return res.status(404).json({
+        success: false,
+        error: 'Sub-agent not found',
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: subAgent,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Update Sub-Agent
+ */
+export const updateSubAgent = async (req, res, next) => {
+  try {
+    // Only agents can update their sub-agents
+    if (req.user.role !== 'agent') {
+      return res.status(403).json({
+        success: false,
+        error: 'Only agents can update sub-agents',
+      });
+    }
+
+    const existingSubAgent = await User.findOne({ 
+      _id: req.params.id, 
+      parentAgent: req.user._id, 
+      role: 'agent' 
+    });
+
+    if (!existingSubAgent) {
+      return res.status(404).json({
+        success: false,
+        error: 'Sub-agent not found',
+      });
+    }
+
+    // Prevent changing parentAgent or role
+    const updateData = { ...req.body };
+    delete updateData.parentAgent;
+    delete updateData.role;
+    delete updateData.managedBy;
+    delete updateData.managedByModel;
+
+    const subAgent = await User.findOneAndUpdate(
+      { _id: req.params.id, parentAgent: req.user._id, role: 'agent' },
+      updateData,
+      { new: true, runValidators: true }
+    )
+      .select('-password')
+      .populate('parentAgent', 'name email')
+      .populate('managedBy', 'name');
+
+    res.status(200).json({
+      success: true,
+      data: subAgent,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Delete Sub-Agent
+ */
+export const deleteSubAgent = async (req, res, next) => {
+  try {
+    // Only agents can delete their sub-agents
+    if (req.user.role !== 'agent') {
+      return res.status(403).json({
+        success: false,
+        error: 'Only agents can delete sub-agents',
+      });
+    }
+
+    const subAgent = await User.findOne({ 
+      _id: req.params.id, 
+      parentAgent: req.user._id, 
+      role: 'agent' 
+    });
+
+    if (!subAgent) {
+      return res.status(404).json({
+        success: false,
+        error: 'Sub-agent not found',
+      });
+    }
+
+    await User.findOneAndDelete({ 
+      _id: req.params.id, 
+      parentAgent: req.user._id, 
+      role: 'agent' 
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Sub-agent deleted successfully',
+    });
+  } catch (error) {
+    next(error);
+  }
+};

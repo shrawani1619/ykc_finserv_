@@ -35,16 +35,82 @@ export const createLead = async (req, res, next) => {
       associatedModel = req.user.managedByModel || (req.user.franchise ? 'Franchise' : undefined);
     }
 
-    // Franchise owners create leads for their franchise
+    // Franchise owners can create leads for themselves or assign to agents
     if (req.user.role === 'franchise') {
-      associated = req.user.franchiseOwned || req.user.franchise || associated;
-      associatedModel = 'Franchise';
+      // If agent is provided in body, use it (could be self or another agent)
+      if (agentId) {
+        // If agent is self (current user), set agent to current user
+        if (agentId.toString() === req.user._id.toString()) {
+          agentId = req.user._id;
+          associated = req.user.franchiseOwned || req.user.franchise || associated;
+          associatedModel = 'Franchise';
+          // Franchise can set commission even when assigned to self (unlike RM)
+        } else {
+          // Agent is assigned to another agent - infer associated from that agent
+          try {
+            const agentUser = await User.findById(agentId).select('managedBy managedByModel');
+            if (agentUser && agentUser.managedBy) {
+              associated = agentUser.managedBy;
+              associatedModel = agentUser.managedByModel;
+            } else {
+              // Fallback to franchise's associated
+              associated = req.user.franchiseOwned || req.user.franchise || associated;
+              associatedModel = 'Franchise';
+            }
+          } catch (err) {
+            console.warn('Unable to infer associated from assigned agent:', err);
+            associated = req.user.franchiseOwned || req.user.franchise || associated;
+            associatedModel = 'Franchise';
+          }
+        }
+      } else {
+        // No agent specified - default to self
+        agentId = req.user._id;
+        associated = req.user.franchiseOwned || req.user.franchise || associated;
+        associatedModel = 'Franchise';
+      }
     }
 
-    // Relationship managers create leads for themselves
+    // Relationship managers can create leads for themselves or assign to agents
     if (req.user.role === 'relationship_manager') {
-      associated = req.user.relationshipManagerOwned || associated;
-      associatedModel = 'RelationshipManager';
+      // If agent is provided in body, use it (could be self or another agent)
+      if (agentId) {
+        // If agent is self (current user), set agent to current user
+        if (agentId.toString() === req.user._id.toString()) {
+          agentId = req.user._id;
+          associated = req.user.relationshipManagerOwned || associated;
+          associatedModel = 'RelationshipManager';
+          // If RM assigns to self, remove commission fields
+          if (req.body.commissionPercentage !== undefined) {
+            delete req.body.commissionPercentage;
+          }
+          if (req.body.commissionAmount !== undefined) {
+            delete req.body.commissionAmount;
+          }
+        } else {
+          // Agent is assigned to another agent - infer associated from that agent
+          try {
+            const agentUser = await User.findById(agentId).select('managedBy managedByModel');
+            if (agentUser && agentUser.managedBy) {
+              associated = agentUser.managedBy;
+              associatedModel = agentUser.managedByModel;
+            } else {
+              // Fallback to RM's associated
+              associated = req.user.relationshipManagerOwned || associated;
+              associatedModel = 'RelationshipManager';
+            }
+          } catch (err) {
+            console.warn('Unable to infer associated from assigned agent:', err);
+            associated = req.user.relationshipManagerOwned || associated;
+            associatedModel = 'RelationshipManager';
+          }
+        }
+      } else {
+        // No agent specified - default to self
+        agentId = req.user._id;
+        associated = req.user.relationshipManagerOwned || associated;
+        associatedModel = 'RelationshipManager';
+      }
     }
 
     // Regional manager: if associatedModel === 'Franchise' enforce regional scope
@@ -74,10 +140,23 @@ export const createLead = async (req, res, next) => {
       }
     }
 
+    // Get agent name if agent is assigned
+    let agentName = req.body.agentName || req.user.name;
+    if (agentId && agentId !== req.user._id) {
+      try {
+        const assignedAgent = await User.findById(agentId).select('name');
+        if (assignedAgent) {
+          agentName = assignedAgent.name;
+        }
+      } catch (err) {
+        console.warn('Unable to fetch assigned agent name:', err);
+      }
+    }
+
     const leadData = {
       ...req.body,
       agent: agentId || req.user._id,
-      agentName: req.user.role === 'super_admin' ? req.user.name : (req.body.agentName || req.user.name),
+      agentName: req.user.role === 'super_admin' ? req.user.name : agentName,
       associated,
       associatedModel,
       leadType: req.body.leadType || 'bank',
@@ -195,6 +274,37 @@ export const createLead = async (req, res, next) => {
         success: false,
         error: 'Invalid associated ID format',
       });
+    }
+    if (leadData.subAgent && !mongoose.Types.ObjectId.isValid(leadData.subAgent)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid sub-agent ID format',
+      });
+    }
+
+    // Validate sub-agent belongs to the agent creating the lead
+    if (leadData.subAgent && req.user.role === 'agent') {
+      try {
+        const subAgent = await User.findOne({ 
+          _id: leadData.subAgent, 
+          parentAgent: req.user._id, 
+          role: 'agent' 
+        });
+        if (!subAgent) {
+          return res.status(403).json({
+            success: false,
+            error: 'Sub-agent not found or does not belong to you',
+          });
+        }
+        // Get sub-agent name
+        leadData.subAgentName = subAgent.name;
+      } catch (err) {
+        console.warn('Unable to validate sub-agent:', err);
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid sub-agent',
+        });
+      }
     }
 
     console.log('🔍 DEBUG: Creating lead with agent:', leadData.agent);
@@ -621,18 +731,27 @@ export const updateLead = async (req, res, next) => {
     // Ensure agent ID is valid ObjectId format
     const updateData = { ...req.body };
 
-    // Only Relationship Manager and Accountant can set commission percentage and amount
+    // Only Relationship Manager, Accountant, and Franchise can set commission percentage and amount
     if (updateData.commissionPercentage !== undefined || updateData.commissionAmount !== undefined) {
-      if (req.user.role !== 'relationship_manager' && req.user.role !== 'accountant') {
+      if (req.user.role !== 'relationship_manager' && req.user.role !== 'accountant' && req.user.role !== 'franchise') {
         // Remove commission fields if user is not authorized
         delete updateData.commissionPercentage;
         delete updateData.commissionAmount;
         // Optionally return error instead of silently removing
         // return res.status(403).json({
         //   success: false,
-        //   error: 'Access denied. Only Relationship Managers and Accountants can set commission.',
+        //   error: 'Access denied. Only Relationship Managers, Accountants, and Franchise can set commission.',
         // });
+      } else if (req.user.role === 'relationship_manager') {
+        // If RM is updating and lead is assigned to self, remove commission fields
+        // (Franchise can set commission even when assigned to self)
+        const finalAgentId = updateData.agent || existingLead.agent;
+        if (finalAgentId && finalAgentId.toString() === req.user._id.toString()) {
+          delete updateData.commissionPercentage;
+          delete updateData.commissionAmount;
+        }
       }
+      // Note: Franchise users can set commission even when assigned to self (no restriction)
     }
 
     // Promote fields from formValues if present (same logic as createLead)
@@ -1023,12 +1142,12 @@ export const verifyLead = async (req, res, next) => {
       remarks,
     };
 
-    // Only Relationship Manager and Accountant can set commission percentage
+    // Only Relationship Manager, Accountant, and Franchise can set commission percentage
     if (commissionPercentage !== undefined) {
-      if (req.user.role !== 'relationship_manager' && req.user.role !== 'accountant') {
+      if (req.user.role !== 'relationship_manager' && req.user.role !== 'accountant' && req.user.role !== 'franchise') {
         return res.status(403).json({
           success: false,
-          error: 'Access denied. Only Relationship Managers and Accountants can set commission percentage.',
+          error: 'Access denied. Only Relationship Managers, Accountants, and Franchise can set commission percentage.',
         });
       }
       updateData.commissionPercentage = commissionPercentage;

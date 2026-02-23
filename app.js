@@ -23,6 +23,11 @@ import bankManagerRouter from './routes/bankManager.route.js';
 import accountantManagerRouter from './routes/accountantManager.route.js';
 import accountantRouter from './routes/accountantDashboard.route.js';
 import historyRouter from './routes/history.route.js';
+import bannerRouter from './routes/banner.route.js';
+import form16Router from './routes/form16.route.js';
+import ticketRouter from './routes/ticket.route.js';
+import notificationRouter from './routes/notification.route.js';
+import { startTicketEscalationJob } from './jobs/ticketEscalation.job.js';
 import connectDB from './config/db.js';
 import { seedDefaultAdmin } from './utils/seedAdmin.js';
 import { seedSampleBankAndManager } from './utils/seedBankAndManager.js';
@@ -39,6 +44,19 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
+
+// Root route
+app.get('/', (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: 'YKC FinServ API Server is running',
+    version: '1.0.0',
+    endpoints: {
+      health: '/health',
+      api: '/api/*'
+    }
+  });
+});
 
 // Health check
 app.get('/health', (req, res) => {
@@ -69,6 +87,10 @@ app.use('/api/accountant-managers', accountantManagerRouter);
 app.use('/api/accountant', accountantRouter);
 app.use('/api/field-defs', fieldDefRouter);
 app.use('/api/history', historyRouter);
+app.use('/api/banners', bannerRouter);
+app.use('/api/form16', form16Router);
+app.use('/api/tickets', ticketRouter);
+app.use('/api/notifications', notificationRouter);
 
 // Error handler (must be last)
 app.use(errorHandler);
@@ -99,6 +121,9 @@ const startServer = async () => {
 
     // Seed default field definitions (Lead Name, Mobile, Email, Address)
     await seedFieldDefinitions();
+
+    // Start ticket escalation cron job
+    startTicketEscalationJob();
 
     // Start Express server
     app.listen(PORT, () => {

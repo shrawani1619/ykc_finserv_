@@ -49,6 +49,18 @@ const leadSchema = new mongoose.Schema(
       trim: true,
     },
 
+    // Sub-agent reference (optional)
+    subAgent: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      index: true,
+    },
+
+    subAgentName: {
+      type: String,
+      trim: true,
+    },
+
     // (No direct franchise field — use polymorphic `associated` + `associatedModel`)
 
     // Polymorphic association: can be a Franchise or a RelationshipManager

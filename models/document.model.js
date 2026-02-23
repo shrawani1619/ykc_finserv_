@@ -9,7 +9,7 @@ const documentSchema = new mongoose.Schema(
     // Reference to the entity this document belongs to
     entityType: {
       type: String,
-      enum: ['lead', 'invoice', 'payout', 'user', 'franchise'],
+      enum: ['lead', 'invoice', 'payout', 'user', 'franchise', 'banner', 'form16', 'ticket'],
       required: true,
       index: true,
     },

@@ -106,6 +106,13 @@ const userSchema = new mongoose.Schema(
       default: 0,
     },
 
+    // For sub-agents: reference to parent agent
+    parentAgent: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      index: true,
+    },
+
     // Permissions array for granular access control
     permissions: {
       type: [String],
@@ -152,6 +159,7 @@ const userSchema = new mongoose.Schema(
 userSchema.index({ role: 1, status: 1 });
 userSchema.index({ franchise: 1, role: 1 });
 userSchema.index({ managedBy: 1, role: 1 });
+userSchema.index({ parentAgent: 1, role: 1 });
 
 // Compare password method (supports both plain text and bcrypt hashed passwords)
 userSchema.methods.comparePassword = async function (enteredPassword) {
