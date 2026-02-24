@@ -542,6 +542,7 @@ export const getSubAgents = async (req, res, next) => {
       });
     }
 
+    // Agents can only see their own sub-agents
     const subAgents = await User.find({ parentAgent: req.user._id, role: 'agent' })
       .select('-password')
       .populate('parentAgent', 'name email')
@@ -570,6 +571,7 @@ export const getSubAgentById = async (req, res, next) => {
       });
     }
 
+    // Agents can only view their own sub-agents
     const subAgent = await User.findOne({ 
       _id: req.params.id, 
       parentAgent: req.user._id, 
@@ -608,6 +610,7 @@ export const updateSubAgent = async (req, res, next) => {
       });
     }
 
+    // Agents can only update their own sub-agents
     const existingSubAgent = await User.findOne({ 
       _id: req.params.id, 
       parentAgent: req.user._id, 
@@ -628,6 +631,7 @@ export const updateSubAgent = async (req, res, next) => {
     delete updateData.managedBy;
     delete updateData.managedByModel;
 
+    // Agents can only update their own sub-agents
     const subAgent = await User.findOneAndUpdate(
       { _id: req.params.id, parentAgent: req.user._id, role: 'agent' },
       updateData,
@@ -659,6 +663,7 @@ export const deleteSubAgent = async (req, res, next) => {
       });
     }
 
+    // Agents can only delete their own sub-agents
     const subAgent = await User.findOne({ 
       _id: req.params.id, 
       parentAgent: req.user._id, 
@@ -672,6 +677,7 @@ export const deleteSubAgent = async (req, res, next) => {
       });
     }
 
+    // Delete the sub-agent
     await User.findOneAndDelete({ 
       _id: req.params.id, 
       parentAgent: req.user._id, 

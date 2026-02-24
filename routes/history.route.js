@@ -5,9 +5,9 @@ import { requireRole } from '../middlewares/role.middleware.js';
 
 const historyRouter = express.Router();
 
-// All routes require authentication and super_admin role
+// All routes require authentication and super_admin or accounts_manager role
 historyRouter.use(authenticate);
-historyRouter.use(requireRole('super_admin'));
+historyRouter.use(requireRole('super_admin', 'accounts_manager'));
 
 // Get all history with filters
 historyRouter.get('/', getAllHistory);

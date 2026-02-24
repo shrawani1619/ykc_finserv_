@@ -215,24 +215,44 @@ export const getRelationshipManagerDashboard = async (req, res, next) => {
       value: idx === 0 ? item.value + (100 - sumPct) : item.value,
     }));
 
+    // Get funnel period filter from query params (weekly, monthly, yearly)
+    const funnelPeriod = req.query.funnelPeriod || 'monthly';
+    const now = new Date();
+    let dateFilter = {};
+    
+    if (funnelPeriod === 'weekly') {
+      const weekAgo = new Date(now);
+      weekAgo.setDate(weekAgo.getDate() - 7);
+      dateFilter = { createdAt: { $gte: weekAgo } };
+    } else if (funnelPeriod === 'monthly') {
+      const monthAgo = new Date(now);
+      monthAgo.setMonth(monthAgo.getMonth() - 1);
+      dateFilter = { createdAt: { $gte: monthAgo } };
+    } else if (funnelPeriod === 'yearly') {
+      const yearAgo = new Date(now);
+      yearAgo.setFullYear(yearAgo.getFullYear() - 1);
+      dateFilter = { createdAt: { $gte: yearAgo } };
+    }
+
     const loggedCount = franchiseIds.length
-      ? await Lead.countDocuments({ associated: { $in: franchiseObjectIds }, associatedModel: 'Franchise', status: 'logged' })
+      ? await Lead.countDocuments({ associated: { $in: franchiseObjectIds }, associatedModel: 'Franchise', status: 'logged', ...dateFilter })
       : 0;
     const sanctionedCount = franchiseIds.length
-      ? await Lead.countDocuments({ associated: { $in: franchiseObjectIds }, associatedModel: 'Franchise', status: 'sanctioned' })
+      ? await Lead.countDocuments({ associated: { $in: franchiseObjectIds }, associatedModel: 'Franchise', status: 'sanctioned', ...dateFilter })
       : 0;
     const disbursedCount = franchiseIds.length
       ? await Lead.countDocuments({
         associated: { $in: franchiseObjectIds },
         associatedModel: 'Franchise',
         status: { $in: ['partial_disbursed', 'disbursed'] },
+        ...dateFilter,
       })
       : 0;
     const completedCount = franchiseIds.length
-      ? await Lead.countDocuments({ associated: { $in: franchiseObjectIds }, associatedModel: 'Franchise', status: 'completed' })
+      ? await Lead.countDocuments({ associated: { $in: franchiseObjectIds }, associatedModel: 'Franchise', status: 'completed', ...dateFilter })
       : 0;
     const rejectedCount = franchiseIds.length
-      ? await Lead.countDocuments({ associated: { $in: franchiseObjectIds }, associatedModel: 'Franchise', status: 'rejected' })
+      ? await Lead.countDocuments({ associated: { $in: franchiseObjectIds }, associatedModel: 'Franchise', status: 'rejected', ...dateFilter })
       : 0;
     const leadConversionFunnel = [
       { stage: 'Logged', value: loggedCount, fill: '#f97316' },
@@ -468,6 +488,25 @@ export const getAccountsDashboard = async (req, res, next) => {
     }));
 
     // 4. Lead Funnel
+    // Get funnel period filter from query params (weekly, monthly, yearly)
+    const funnelPeriod = req.query.funnelPeriod || 'monthly';
+    const now = new Date();
+    let dateFilter = {};
+    
+    if (funnelPeriod === 'weekly') {
+      const weekAgo = new Date(now);
+      weekAgo.setDate(weekAgo.getDate() - 7);
+      dateFilter = { createdAt: { $gte: weekAgo } };
+    } else if (funnelPeriod === 'monthly') {
+      const monthAgo = new Date(now);
+      monthAgo.setMonth(monthAgo.getMonth() - 1);
+      dateFilter = { createdAt: { $gte: monthAgo } };
+    } else if (funnelPeriod === 'yearly') {
+      const yearAgo = new Date(now);
+      yearAgo.setFullYear(yearAgo.getFullYear() - 1);
+      dateFilter = { createdAt: { $gte: yearAgo } };
+    }
+
     const funnelSteps = ['logged', 'sanctioned', 'disbursed', 'completed', 'rejected'];
     const funnelMap = {
       logged: 'Logged',
@@ -479,7 +518,7 @@ export const getAccountsDashboard = async (req, res, next) => {
     const funnelColors = ['#f97316', '#84cc16', '#3b82f6', '#ea580c', '#dc2626'];
 
     const funnelData = await Promise.all(funnelSteps.map(async (step, idx) => {
-      const count = await Lead.countDocuments({ status: step });
+      const count = await Lead.countDocuments({ status: step, ...dateFilter });
       return {
         name: funnelMap[step],
         value: count,
@@ -615,11 +654,33 @@ export const getAdminDashboard = async (req, res, next) => {
     ]);
     const totalLoanAmount = totalLoanAmountAgg[0]?.total || 0;
 
-    const loggedCount = await Lead.countDocuments({ ...franchiseMatch, status: 'logged' });
-    const sanctionedCount = await Lead.countDocuments({ ...franchiseMatch, status: 'sanctioned' });
-    const disbursedCount = await Lead.countDocuments({ ...franchiseMatch, status: { $in: ['partial_disbursed', 'disbursed'] } });
-    const completedCount = await Lead.countDocuments({ ...franchiseMatch, status: 'completed' });
-    const rejectedCount = await Lead.countDocuments({ ...franchiseMatch, status: 'rejected' });
+    // Get funnel period filter from query params (weekly, monthly, yearly)
+    const funnelPeriod = req.query.funnelPeriod || 'monthly';
+    const now = new Date();
+    let dateFilter = {};
+    
+    if (funnelPeriod === 'weekly') {
+      const weekAgo = new Date(now);
+      weekAgo.setDate(weekAgo.getDate() - 7);
+      dateFilter = { createdAt: { $gte: weekAgo } };
+    } else if (funnelPeriod === 'monthly') {
+      const monthAgo = new Date(now);
+      monthAgo.setMonth(monthAgo.getMonth() - 1);
+      dateFilter = { createdAt: { $gte: monthAgo } };
+    } else if (funnelPeriod === 'yearly') {
+      const yearAgo = new Date(now);
+      yearAgo.setFullYear(yearAgo.getFullYear() - 1);
+      dateFilter = { createdAt: { $gte: yearAgo } };
+    }
+
+    // Combine franchise match with date filter
+    const funnelMatch = { ...franchiseMatch, ...dateFilter };
+
+    const loggedCount = await Lead.countDocuments({ ...funnelMatch, status: 'logged' });
+    const sanctionedCount = await Lead.countDocuments({ ...funnelMatch, status: 'sanctioned' });
+    const disbursedCount = await Lead.countDocuments({ ...funnelMatch, status: { $in: ['partial_disbursed', 'disbursed'] } });
+    const completedCount = await Lead.countDocuments({ ...funnelMatch, status: 'completed' });
+    const rejectedCount = await Lead.countDocuments({ ...funnelMatch, status: 'rejected' });
     const leadConversionFunnel = [
       { stage: 'Logged', value: loggedCount, fill: '#f97316' },
       { stage: 'Sanctioned', value: sanctionedCount, fill: '#84cc16' },

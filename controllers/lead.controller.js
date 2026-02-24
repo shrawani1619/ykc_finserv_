@@ -153,6 +153,46 @@ export const createLead = async (req, res, next) => {
       }
     }
 
+    // Validate franchise commission limits if franchise user is setting commission
+    if (req.user.role === 'franchise' && req.body.bank && (req.body.commissionPercentage || req.body.commissionAmount)) {
+      try {
+        const FranchiseCommissionLimit = (await import('../models/franchiseCommissionLimit.model.js')).default;
+        const commissionLimit = await FranchiseCommissionLimit.findOne({ bank: req.body.bank })
+          .populate('bank', 'name');
+
+        if (commissionLimit) {
+          let exceedsLimit = false;
+          let errorMessage = '';
+
+          if (commissionLimit.limitType === 'percentage') {
+            // Validate percentage
+            const franchisePercentage = req.body.commissionPercentage ? parseFloat(req.body.commissionPercentage) : 0;
+            if (franchisePercentage > commissionLimit.maxCommissionValue) {
+              exceedsLimit = true;
+              errorMessage = `Commission cannot exceed Admin maximum limit of ${commissionLimit.maxCommissionValue}%`;
+            }
+          } else if (commissionLimit.limitType === 'amount') {
+            // Validate amount
+            const franchiseAmount = req.body.commissionAmount ? parseFloat(req.body.commissionAmount) : 0;
+            if (franchiseAmount > commissionLimit.maxCommissionValue) {
+              exceedsLimit = true;
+              errorMessage = `Commission cannot exceed Admin maximum limit of ₹${commissionLimit.maxCommissionValue.toLocaleString()}`;
+            }
+          }
+
+          if (exceedsLimit) {
+            return res.status(400).json({
+              success: false,
+              error: errorMessage,
+            });
+          }
+        }
+      } catch (error) {
+        console.error('Error validating franchise commission limit:', error);
+        // Don't block lead creation if validation fails, but log the error
+      }
+    }
+
     const leadData = {
       ...req.body,
       agent: agentId || req.user._id,
