@@ -233,16 +233,25 @@ export async function generateTicketId() {
 }
 
 /**
- * Create notification for ticket events
+ * Create notification for ticket events and other events
  */
-export async function createNotification(userId, title, message, relatedTicketId, type = 'ticket_assigned') {
-  return Notification.create({
+export async function createNotification(userId, title, message, relatedTicketId = null, type = 'ticket_assigned', relatedInvoiceId = null) {
+  const notificationData = {
     userId,
     title,
     message,
-    relatedTicketId,
     isRead: false,
     type,
-  });
+  };
+
+  if (relatedTicketId) {
+    notificationData.relatedTicketId = relatedTicketId;
+  }
+
+  if (relatedInvoiceId) {
+    notificationData.relatedInvoiceId = relatedInvoiceId;
+  }
+
+  return Notification.create(notificationData);
 }
 

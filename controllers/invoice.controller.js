@@ -2,6 +2,8 @@ import invoiceService from '../services/invoice.service.js';
 import { getPaginationMeta } from '../utils/helpers.js';
 import Invoice from '../models/invoice.model.js';
 import { getRegionalManagerFranchiseIds, regionalManagerCanAccessFranchise } from '../utils/regionalScope.js';
+import { createNotification } from '../services/ticket.service.js';
+import User from '../models/user.model.js';
 
 /**
  * Get all invoices
@@ -446,12 +448,31 @@ export const updateInvoice = async (req, res, next) => {
         return res.status(403).json({ success: false, error: 'Access denied.' });
       }
     }
+
+    // Get the invoice before update to check previous status
+    const previousInvoice = await Invoice.findById(req.params.id)
+      .populate('agent', 'name email')
+      .populate('subAgent', 'name email')
+      .populate('franchise', 'name');
+
+    if (!previousInvoice) {
+      return res.status(404).json({
+        success: false,
+        message: 'Invoice not found',
+      });
+    }
+
+    const previousStatus = previousInvoice.status;
+    const newStatus = req.body.status;
+
+    // Update the invoice
     const invoice = await Invoice.findByIdAndUpdate(req.params.id, req.body, {
       new: true,
       runValidators: true,
     })
       .populate('lead', 'loanAccountNo loanType')
       .populate('agent', 'name email')
+      .populate('subAgent', 'name email')
       .populate('franchise', 'name');
 
     if (!invoice) {
@@ -459,6 +480,53 @@ export const updateInvoice = async (req, res, next) => {
         success: false,
         message: 'Invoice not found',
       });
+    }
+
+    // Send notification if status changed from 'pending' to 'paid'
+    if (previousStatus === 'pending' && newStatus === 'paid') {
+      try {
+        let notificationUserId = null;
+
+        // Determine which user should receive the notification
+        if (invoice.invoiceType === 'agent' || invoice.invoiceType === 'sub_agent') {
+          // For agent/sub_agent invoices, notify the agent (or subAgent if it's a sub_agent invoice)
+          if (invoice.invoiceType === 'sub_agent' && invoice.subAgent) {
+            notificationUserId = invoice.subAgent._id || invoice.subAgent;
+          } else if (invoice.agent) {
+            notificationUserId = invoice.agent._id || invoice.agent;
+          }
+        } else if (invoice.invoiceType === 'franchise') {
+          // For franchise invoices, find the franchise owner
+          const franchiseOwner = await User.findOne({
+            role: 'franchise',
+            franchiseOwned: invoice.franchise._id || invoice.franchise,
+          }).select('_id');
+
+          if (franchiseOwner) {
+            notificationUserId = franchiseOwner._id;
+          }
+        }
+
+        // Create notification if we found a user to notify
+        if (notificationUserId) {
+          const invoiceNumber = invoice.invoiceNumber || 'N/A';
+          const netPayable = invoice.netPayable || 0;
+          const title = 'Invoice Paid';
+          const message = `Your invoice ${invoiceNumber} has been marked as paid. Amount: ₹${netPayable.toLocaleString('en-IN')}`;
+
+          await createNotification(
+            notificationUserId,
+            title,
+            message,
+            null, // relatedTicketId
+            'invoice_paid',
+            invoice._id // relatedInvoiceId
+          );
+        }
+      } catch (notificationError) {
+        // Log error but don't fail the invoice update
+        console.error('Error creating invoice paid notification:', notificationError);
+      }
     }
 
     res.status(200).json({

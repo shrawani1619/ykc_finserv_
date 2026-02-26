@@ -31,6 +31,12 @@ const notificationSchema = new mongoose.Schema(
       index: true,
     },
 
+    relatedInvoiceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Invoice',
+      index: true,
+    },
+
     isRead: {
       type: Boolean,
       default: false,
@@ -39,7 +45,7 @@ const notificationSchema = new mongoose.Schema(
 
     type: {
       type: String,
-      enum: ['ticket_assigned', 'ticket_escalated', 'ticket_resolved', 'ticket_reassigned', 'banner_created'],
+      enum: ['ticket_assigned', 'ticket_escalated', 'ticket_resolved', 'ticket_reassigned', 'banner_created', 'invoice_paid'],
       default: 'ticket_assigned',
     },
   },

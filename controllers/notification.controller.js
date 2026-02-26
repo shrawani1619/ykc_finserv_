@@ -15,6 +15,7 @@ export const getNotifications = async (req, res, next) => {
     const notifications = await Notification.find(query)
       .populate('relatedTicketId', 'ticketId category status')
       .populate('relatedBannerId', 'name attachment status')
+      .populate('relatedInvoiceId', 'invoiceNumber status netPayable')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit))
