@@ -81,37 +81,9 @@ export const getInvoiceById = async (req, res, next) => {
       });
     }
 
-    // Role-based access control
-    if (req.user.role === 'agent' && invoice.agent.toString() !== req.user._id.toString()) {
-      return res.status(403).json({
-        success: false,
-        error: 'Access denied. You can only view your own invoices.',
-      });
-    }
-
-    if (req.user.role === 'franchise') {
-      if (!req.user.franchiseOwned) {
-        return res.status(400).json({
-          success: false,
-          message: 'Franchise owner does not have an associated franchise',
-        });
-      }
-      if (invoice.franchise?.toString() !== req.user.franchiseOwned.toString()) {
-        return res.status(403).json({
-          success: false,
-          error: 'Access denied. You can only view invoices from your franchise.',
-        });
-      }
-    }
-    if (req.user.role === 'regional_manager') {
-      const canAccess = await regionalManagerCanAccessFranchise(req, invoice.franchise);
-      if (!canAccess) {
-        return res.status(403).json({
-          success: false,
-          error: 'Access denied. You can only view invoices from franchises associated with you.',
-        });
-      }
-    }
+    // NOTE: Role-based access checks removed to allow all authenticated users
+    // to view/download any invoice. If you need to reintroduce restrictions,
+    // add them here.
 
     res.status(200).json({
       success: true,
