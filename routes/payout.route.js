@@ -17,11 +17,47 @@ const payoutRouter = Router();
 // All routes require authentication
 payoutRouter.use(authenticate);
 
+// File upload middleware for bank payment receipts
+const setupFileUpload = async () => {
+  const fileUploadService = (await import('../services/fileUpload.service.js')).default;
+  return fileUploadService.getUploadMiddleware('bankPaymentReceipt');
+};
+
 // CRUD operations
-payoutRouter.post('/', requireRole('super_admin', 'accounts_manager', 'relationship_manager'), createPayout);
+payoutRouter.post('/', requireRole('super_admin', 'accounts_manager', 'relationship_manager'), async (req, res, next) => {
+  try {
+    const upload = await setupFileUpload();
+    upload(req, res, (err) => {
+      if (err) {
+        return res.status(400).json({
+          success: false,
+          error: err.message,
+        });
+      }
+      createPayout(req, res, next);
+    });
+  } catch (error) {
+    next(error);
+  }
+});
 payoutRouter.get('/', getPayouts);
 payoutRouter.get('/:id', getPayoutById);
-payoutRouter.put('/:id', requireRole('super_admin', 'accounts_manager', 'relationship_manager'), updatePayout);
+payoutRouter.put('/:id', requireRole('super_admin', 'accounts_manager', 'relationship_manager'), async (req, res, next) => {
+  try {
+    const upload = await setupFileUpload();
+    upload(req, res, (err) => {
+      if (err) {
+        return res.status(400).json({
+          success: false,
+          error: err.message,
+        });
+      }
+      updatePayout(req, res, next);
+    });
+  } catch (error) {
+    next(error);
+  }
+});
 payoutRouter.delete('/:id', requireRole('super_admin', 'accounts_manager', 'relationship_manager'), deletePayout);
 
 // Accounts manager actions

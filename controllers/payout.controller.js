@@ -45,9 +45,11 @@ export const getPayouts = async (req, res, next) => {
     if (franchiseId && req.user.role !== 'regional_manager') query.franchise = franchiseId;
 
     const payouts = await Payout.find(query)
-      .populate('agent', 'name email')
+      .populate('agent', 'name email mobile')
       .populate('franchise', 'name')
       .populate('invoices')
+      // Use lean so if populate doesn't find a document, the original id is still present (helps UI avoid N/A)
+      .lean()
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit));
@@ -248,34 +250,74 @@ export const createPayout = async (req, res, next) => {
         });
       }
     }
+    
+    // Handle file upload for bank payment receipt
+    let bankPaymentReceipt = null;
+    if (req.file) {
+      const fileUploadService = (await import('../services/fileUpload.service.js')).default;
+      try {
+        const document = await fileUploadService.processUploadedFile(req.file, {
+          entityType: 'payout',
+          entityId: 'temp', // Will be updated after payout creation
+          documentType: 'bank_payment_receipt',
+          description: 'Bank payment receipt',
+          uploadedBy: req.user._id,
+        });
+        
+        bankPaymentReceipt = {
+          filename: document.originalFileName,
+          url: document.url || `/uploads/documents/${document.fileName}`,
+          uploadedAt: new Date(),
+          uploadedBy: req.user._id,
+        };
+      } catch (fileError) {
+        console.error('Error processing file upload:', fileError);
+        return res.status(400).json({
+          success: false,
+          error: 'Failed to upload bank payment receipt: ' + fileError.message,
+        });
+      }
+    }
+    
     // Generate payoutNumber if not provided
     const { generatePayoutNumber } = await import('../utils/helpers.js');
     const payoutData = {
       ...req.body,
       payoutNumber: req.body.payoutNumber || await generatePayoutNumber(),
+      ...(bankPaymentReceipt && { bankPaymentReceipt }),
     };
 
-    console.log('🔍 DEBUG: Creating payout with data:', {
-      payoutNumber: payoutData.payoutNumber,
-      agent: payoutData.agent,
-      franchise: payoutData.franchise,
-      totalAmount: payoutData.totalAmount,
-      netPayable: payoutData.netPayable,
-      status: payoutData.status
-    });
+    // Parse JSON fields if they're strings
+    if (typeof payoutData.invoices === 'string') {
+      try {
+        payoutData.invoices = JSON.parse(payoutData.invoices);
+      } catch (e) {
+        payoutData.invoices = [];
+      }
+    }
+    if (typeof payoutData.bankDetails === 'string') {
+      try {
+        payoutData.bankDetails = JSON.parse(payoutData.bankDetails);
+      } catch (e) {
+        payoutData.bankDetails = {};
+      }
+    }
 
     const payout = await Payout.create(payoutData);
+
+    // Update document entityId if file was uploaded
+    if (bankPaymentReceipt && req.file) {
+      const Document = (await import('../models/document.model.js')).default;
+      await Document.updateOne(
+        { url: bankPaymentReceipt.url },
+        { entityId: payout._id }
+      );
+    }
 
     const populatedPayout = await Payout.findById(payout._id)
       .populate('agent', 'name email mobile')
       .populate('franchise', 'name')
       .populate('invoices');
-
-    console.log('🔍 DEBUG: Created payout:', {
-      payoutId: populatedPayout._id,
-      agent: populatedPayout.agent,
-      agentName: populatedPayout.agent?.name
-    });
 
     res.status(201).json({
       success: true,
@@ -283,7 +325,7 @@ export const createPayout = async (req, res, next) => {
       data: populatedPayout,
     });
   } catch (error) {
-    console.error('🔍 DEBUG: Create payout error:', error);
+    console.error('Error creating payout:', error);
     next(error);
   }
 };
@@ -310,11 +352,64 @@ export const updatePayout = async (req, res, next) => {
         return res.status(403).json({ success: false, error: 'Access denied.' });
       }
     }
-    const payout = await Payout.findByIdAndUpdate(req.params.id, req.body, {
+    
+    // Handle file upload for bank payment receipt if new file is provided
+    let bankPaymentReceipt = null;
+    if (req.file) {
+      const fileUploadService = (await import('../services/fileUpload.service.js')).default;
+      try {
+        const document = await fileUploadService.processUploadedFile(req.file, {
+          entityType: 'payout',
+          entityId: req.params.id,
+          documentType: 'bank_payment_receipt',
+          description: 'Bank payment receipt',
+          uploadedBy: req.user._id,
+        });
+        
+        bankPaymentReceipt = {
+          filename: document.originalFileName,
+          url: document.url || `/uploads/documents/${document.fileName}`,
+          uploadedAt: new Date(),
+          uploadedBy: req.user._id,
+        };
+      } catch (fileError) {
+        console.error('Error processing file upload:', fileError);
+        return res.status(400).json({
+          success: false,
+          error: 'Failed to upload bank payment receipt: ' + fileError.message,
+        });
+      }
+    }
+    
+    // Prepare update data
+    const updateData = { ...req.body };
+    
+    // Parse JSON fields if they're strings
+    if (typeof updateData.invoices === 'string') {
+      try {
+        updateData.invoices = JSON.parse(updateData.invoices);
+      } catch (e) {
+        updateData.invoices = [];
+      }
+    }
+    if (typeof updateData.bankDetails === 'string') {
+      try {
+        updateData.bankDetails = JSON.parse(updateData.bankDetails);
+      } catch (e) {
+        updateData.bankDetails = {};
+      }
+    }
+    
+    // Add bank payment receipt if uploaded
+    if (bankPaymentReceipt) {
+      updateData.bankPaymentReceipt = bankPaymentReceipt;
+    }
+    
+    const payout = await Payout.findByIdAndUpdate(req.params.id, updateData, {
       new: true,
       runValidators: true,
     })
-      .populate('agent', 'name email')
+      .populate('agent', 'name email mobile')
       .populate('franchise', 'name')
       .populate('invoices');
 

@@ -108,6 +108,17 @@ const payoutSchema = new mongoose.Schema(
     },
 
     remarks: String,
+
+    // Bank payment receipt (when bank pays to company)
+    bankPaymentReceipt: {
+      filename: String,
+      url: String,
+      uploadedAt: Date,
+      uploadedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+      },
+    },
   },
   { timestamps: true }
 );

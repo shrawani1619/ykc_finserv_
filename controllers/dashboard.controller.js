@@ -200,48 +200,71 @@ export const getStaffDashboard = async (req, res, next) => {
  */
 export const getRelationshipManagerDashboard = async (req, res, next) => {
   try {
-    // Relationship managers are not linked to franchises in the updated hierarchy.
-    // Return empty datasets for franchise-scoped metrics.
-    const franchiseIds = [];
-    const franchiseObjectIds = [];
-    const franchiseMatch = { _id: null };
+    // Get the Relationship Manager ID from the user
+    let rmId = req.user.relationshipManagerOwned;
+    if (!rmId) {
+      // Try to find the RM profile by owner
+      const RelationshipManager = (await import('../models/relationship.model.js')).default;
+      const rmDoc = await RelationshipManager.findOne({ owner: req.user._id }).select('_id');
+      if (rmDoc) rmId = rmDoc._id;
+    }
 
-    const totalLeads = await Lead.countDocuments(franchiseMatch);
-    const totalAgents = franchiseIds.length
-      ? await User.countDocuments({ role: 'agent', franchise: { $in: franchiseObjectIds }, status: 'active' })
-      : 0;
-    const totalFranchises = franchiseIds.length;
-    const totalInvoices = franchiseIds.length
-      ? await Invoice.countDocuments({ franchise: { $in: franchiseObjectIds } })
+    // Find all agents managed by this Relationship Manager
+    const managedAgentIds = rmId 
+      ? await User.find({ managedByModel: 'RelationshipManager', managedBy: rmId }).distinct('_id')
+      : [];
+    
+    // Include the RM user themselves as an agent (if they create leads for themselves)
+    const allAgentIds = [...managedAgentIds];
+    if (req.user._id) {
+      allAgentIds.push(req.user._id);
+    }
+
+    // Build lead match query: leads where agent is in managed agents OR associated with this RM
+    const leadMatch = {
+      $or: [
+        { agent: { $in: allAgentIds } },
+        { associatedModel: 'RelationshipManager', associated: rmId }
+      ]
+    };
+
+    const totalLeads = rmId ? await Lead.countDocuments(leadMatch) : 0;
+    const totalAgents = managedAgentIds.length;
+    const totalFranchises = 0; // RMs don't manage franchises directly
+    
+    // Get invoices for leads managed by this RM
+    const leadIds = rmId ? await Lead.find(leadMatch).distinct('_id') : [];
+    const totalInvoices = leadIds.length
+      ? await Invoice.countDocuments({ lead: { $in: leadIds } })
       : 0;
 
-    const commissionAggregation = franchiseIds.length
+    const commissionAggregation = leadIds.length
       ? await Invoice.aggregate([
-        { $match: { franchise: { $in: franchiseObjectIds } } },
+        { $match: { lead: { $in: leadIds } } },
         { $group: { _id: null, total: { $sum: '$commissionAmount' } } },
       ])
       : [];
     const totalCommission = commissionAggregation[0]?.total || 0;
 
-    const payoutAggregation = franchiseIds.length
-      ? await Payout.aggregate([
-        { $match: { franchise: { $in: franchiseObjectIds }, status: 'paid' } },
-        { $group: { _id: null, total: { $sum: '$netPayable' } } },
+    const payoutAggregation = leadIds.length
+      ? await Invoice.aggregate([
+        { $match: { lead: { $in: leadIds }, status: 'paid' } },
+        { $group: { _id: null, total: { $sum: '$commissionAmount' } } },
       ])
       : [];
     const totalPayouts = payoutAggregation[0]?.total || 0;
 
-    const leadStatusBreakdown = franchiseIds.length
+    const leadStatusBreakdown = rmId
       ? await Lead.aggregate([
-        { $match: { associated: { $in: franchiseObjectIds }, associatedModel: 'Franchise' } },
+        { $match: leadMatch },
         { $group: { _id: '$status', count: { $sum: 1 } } },
       ])
       : [];
 
-    const loanDistributionAgg = franchiseIds.length
+    const loanDistributionAgg = rmId
       ? await Lead.aggregate([
-        { $match: { associated: { $in: franchiseObjectIds }, associatedModel: 'Franchise' } },
-        { $group: { _id: '$loanType', count: { $sum: 1 } } },
+        { $match: { ...leadMatch, loanType: { $exists: true, $ne: null } } },
+        { $group: { _id: '$loanType', count: { $sum: 1 }, totalAmount: { $sum: '$loanAmount' } } },
         { $sort: { count: -1 } },
       ])
       : [];
@@ -260,6 +283,7 @@ export const getRelationshipManagerDashboard = async (req, res, next) => {
       name: loanTypeLabels[item._id] || item._id,
       value: Math.round((item.count / totalForLoan) * 100),
       count: item.count,
+      totalAmount: item.totalAmount || 0,
       color: loanDistributionColors[idx % loanDistributionColors.length],
     }));
     const sumPct = loanDistributionRaw.reduce((s, i) => s + i.value, 0);
@@ -288,8 +312,8 @@ export const getRelationshipManagerDashboard = async (req, res, next) => {
     }
 
     // Calculate total amounts for each funnel stage instead of counts
-    const funnelMatch = franchiseIds.length
-      ? { associated: { $in: franchiseObjectIds }, associatedModel: 'Franchise', ...dateFilter }
+    const funnelMatch = rmId
+      ? { ...leadMatch, ...dateFilter }
       : { ...dateFilter };
     
     const loggedAgg = await Lead.aggregate([
@@ -321,8 +345,8 @@ export const getRelationshipManagerDashboard = async (req, res, next) => {
       { stage: 'Rejected', value: rejectedAgg[0]?.totalAmount || 0, fill: '#b91c1c' },
     ];
 
-    const recentLeads = franchiseIds.length
-      ? await Lead.find({ /* franchise-scoped: leads are linked via `associated` */ associated: { $in: franchiseObjectIds }, associatedModel: 'Franchise' })
+    const recentLeads = rmId
+      ? await Lead.find(leadMatch)
         .populate('agent', 'name email')
         .populate('associated', 'name')
         .populate('referralFranchise', 'name')
@@ -331,39 +355,31 @@ export const getRelationshipManagerDashboard = async (req, res, next) => {
         .limit(5)
       : [];
 
-    const recentAgents = franchiseIds.length
-      ? await User.find({ role: 'agent', franchise: { $in: franchiseObjectIds } })
+    const recentAgents = managedAgentIds.length
+      ? await User.find({ _id: { $in: managedAgentIds } })
         .select('name email mobile status createdAt')
-        .populate('franchise', 'name')
         .sort({ createdAt: -1 })
         .limit(5)
       : [];
 
     const recentFranchises = [];
 
-    const recentInvoices = franchiseIds.length
-      ? await Invoice.find({ franchise: { $in: franchiseObjectIds } })
+    const recentInvoices = leadIds.length
+      ? await Invoice.find({ lead: { $in: leadIds } })
         .populate('agent', 'name email')
-        .populate('franchise', 'name')
+        .populate('lead', 'customerName applicantMobile loanAmount')
         .select('invoiceNumber amount commissionAmount status createdAt')
         .sort({ createdAt: -1 })
         .limit(5)
       : [];
 
-    const recentPayouts = franchiseIds.length
-      ? await Payout.find({ franchise: { $in: franchiseObjectIds } })
-        .populate('agent', 'name email')
-        .populate('franchise', 'name')
-        .select('payoutNumber netPayable status createdAt')
-        .sort({ createdAt: -1 })
-        .limit(5)
-      : [];
+    const recentPayouts = []; // RMs don't have direct payouts
 
     const sevenMonthsAgo = new Date();
     sevenMonthsAgo.setMonth(sevenMonthsAgo.getMonth() - 7);
-    const visitorData = franchiseIds.length
+    const visitorData = rmId
       ? await Lead.aggregate([
-        { $match: { associated: { $in: franchiseObjectIds }, associatedModel: 'Franchise', createdAt: { $gte: sevenMonthsAgo } } },
+        { $match: { ...leadMatch, createdAt: { $gte: sevenMonthsAgo } } },
         {
           $group: {
             _id: { year: { $year: '$createdAt' }, month: { $month: '$createdAt' } },
@@ -385,14 +401,14 @@ export const getRelationshipManagerDashboard = async (req, res, next) => {
     }));
 
     const totalLeadsCount = totalLeads;
-    const completedLeadsCount = franchiseIds.length
-      ? await Lead.countDocuments({ associated: { $in: franchiseObjectIds }, associatedModel: 'Franchise', status: 'completed' })
+    const completedLeadsCount = rmId
+      ? await Lead.countDocuments({ ...leadMatch, status: 'completed' })
       : 0;
-    const activeLeadsCount = franchiseIds.length
-      ? await Lead.countDocuments({ associated: { $in: franchiseObjectIds }, associatedModel: 'Franchise', status: 'active' })
+    const activeLeadsCount = rmId
+      ? await Lead.countDocuments({ ...leadMatch, status: 'active' })
       : 0;
-    const verifiedLeadsCount = franchiseIds.length
-      ? await Lead.countDocuments({ associated: { $in: franchiseObjectIds }, associatedModel: 'Franchise', verificationStatus: 'verified' })
+    const verifiedLeadsCount = rmId
+      ? await Lead.countDocuments({ ...leadMatch, verificationStatus: 'verified' })
       : 0;
 
     const bounceRate = totalLeadsCount > 0 ? ((totalLeadsCount - completedLeadsCount) / totalLeadsCount * 100).toFixed(2) : 0;
@@ -402,9 +418,9 @@ export const getRelationshipManagerDashboard = async (req, res, next) => {
 
     const previousPeriodStart = new Date(sevenMonthsAgo);
     previousPeriodStart.setMonth(previousPeriodStart.getMonth() - 7);
-    const prevMatch = franchiseIds.length
+    const prevMatch = rmId
       ? {
-        franchise: { $in: franchiseObjectIds },
+        ...leadMatch,
         createdAt: { $gte: previousPeriodStart, $lt: sevenMonthsAgo },
       }
       : { _id: null };
@@ -428,12 +444,14 @@ export const getRelationshipManagerDashboard = async (req, res, next) => {
       { name: 'Others', value: 6, color: '#9ca3af' },
     ];
 
-    const franchiseLeadIds = franchiseIds.length ? await Lead.find({ associated: { $in: franchiseObjectIds }, associatedModel: 'Franchise' }).distinct('_id') : [];
-    const totalEmails = franchiseLeadIds.length ? await EmailLog.countDocuments({ entityType: 'lead', entityId: { $in: franchiseLeadIds } }) : 0;
-    const sentEmails = franchiseLeadIds.length ? await EmailLog.countDocuments({ entityType: 'lead', entityId: { $in: franchiseLeadIds }, status: 'sent' }) : 0;
-    const bouncedEmails = franchiseLeadIds.length ? await EmailLog.countDocuments({ entityType: 'lead', entityId: { $in: franchiseLeadIds }, status: 'bounced' }) : 0;
+    const totalEmails = leadIds.length ? await EmailLog.countDocuments({ entityType: 'lead', entityId: { $in: leadIds } }) : 0;
+    const sentEmails = leadIds.length ? await EmailLog.countDocuments({ entityType: 'lead', entityId: { $in: leadIds }, status: 'sent' }) : 0;
+    const bouncedEmails = leadIds.length ? await EmailLog.countDocuments({ entityType: 'lead', entityId: { $in: leadIds }, status: 'bounced' }) : 0;
     const openedEmails = Math.floor(sentEmails * 0.49);
     const clickedEmails = Math.floor(sentEmails * 0.25);
+
+    // Calculate total loan amount from loan distribution
+    const totalLoanAmount = loanDistribution.reduce((sum, item) => sum + (item.totalAmount || 0), 0);
 
     res.status(200).json({
       success: true,
@@ -445,6 +463,7 @@ export const getRelationshipManagerDashboard = async (req, res, next) => {
         totalCommission,
         totalPayouts,
         totalRevenue: totalCommission,
+        totalLoanAmount,
         leadStatusBreakdown,
         loanDistribution,
         leadConversionFunnel,
@@ -657,28 +676,77 @@ export const getAdminDashboard = async (req, res, next) => {
   try {
     const isRegionalManager = req.user.role === 'regional_manager';
     const franchiseIds = isRegionalManager ? await getRegionalManagerFranchiseIds(req) : null;
+    
+    // For regional managers, also get Relationship Manager IDs they manage
+    let rmIds = [];
+    if (isRegionalManager) {
+      const RelationshipManager = (await import('../models/relationship.model.js')).default;
+      rmIds = await RelationshipManager.find({ regionalManager: req.user._id }).distinct('_id');
+    }
+    
+    // Build proper lead match query for regional managers (leads use associated/associatedModel, not franchise)
+    let leadMatch = {};
+    if (isRegionalManager) {
+      if (franchiseIds?.length || rmIds.length) {
+        leadMatch = {
+          $or: [
+            ...(franchiseIds?.length ? [{ associated: { $in: franchiseIds }, associatedModel: 'Franchise' }] : []),
+            ...(rmIds.length ? [{ associated: { $in: rmIds }, associatedModel: 'RelationshipManager' }] : [])
+          ]
+        };
+      } else {
+        leadMatch = { _id: null }; // No accessible data
+      }
+    }
+    
     const franchiseMatch =
       franchiseIds?.length ? { franchise: { $in: franchiseIds } } : isRegionalManager ? { _id: null } : {};
 
-    const totalLeads = await Lead.countDocuments(franchiseMatch);
-    const totalAgents = await User.countDocuments({
-      role: 'agent',
-      status: 'active',
-      ...(franchiseMatch.franchise && { franchise: franchiseMatch.franchise }),
-      ...(isRegionalManager && !franchiseIds?.length && { _id: null }),
-    });
+    const totalLeads = isRegionalManager ? await Lead.countDocuments(leadMatch) : await Lead.countDocuments(franchiseMatch);
+    
+    // For regional managers, count agents managed by their franchises or relationship managers
+    let totalAgents = 0;
+    if (isRegionalManager) {
+      const agentQuery = {
+        role: 'agent',
+        status: 'active',
+      };
+      if (franchiseIds?.length || rmIds.length) {
+        agentQuery.$or = [
+          ...(franchiseIds?.length ? [{ managedByModel: 'Franchise', managedBy: { $in: franchiseIds } }] : []),
+          ...(rmIds.length ? [{ managedByModel: 'RelationshipManager', managedBy: { $in: rmIds } }] : [])
+        ];
+      } else {
+        agentQuery._id = null; // No accessible agents
+      }
+      totalAgents = await User.countDocuments(agentQuery);
+    } else {
+      totalAgents = await User.countDocuments({
+        role: 'agent',
+        status: 'active',
+        ...(franchiseMatch.franchise && { franchise: franchiseMatch.franchise }),
+      });
+    }
     const totalFranchises = isRegionalManager
       ? await Franchise.countDocuments({ status: 'active', regionalManager: req.user._id })
       : await Franchise.countDocuments({ status: 'active' });
-    const totalInvoices =
-      franchiseMatch.franchise
+    // For regional managers, query invoices by franchise
+    let totalInvoices = 0;
+    if (isRegionalManager) {
+      if (franchiseIds?.length) {
+        totalInvoices = await Invoice.countDocuments({ franchise: { $in: franchiseIds } });
+      } else {
+        totalInvoices = 0;
+      }
+    } else {
+      totalInvoices = franchiseMatch.franchise
         ? await Invoice.countDocuments({ franchise: franchiseMatch.franchise })
-        : isRegionalManager
-          ? await Invoice.countDocuments({ _id: null })
-          : await Invoice.countDocuments();
+        : await Invoice.countDocuments();
+    }
 
     const commissionAggregation = await Invoice.aggregate([
-      ...(franchiseMatch.franchise ? [{ $match: { franchise: { $in: franchiseIds } } }] : []),
+      ...(isRegionalManager && franchiseIds?.length ? [{ $match: { franchise: { $in: franchiseIds } } }] : []),
+      ...(!isRegionalManager && franchiseMatch.franchise ? [{ $match: { franchise: { $in: franchiseIds } } }] : []),
       ...(isRegionalManager && !franchiseIds?.length ? [{ $match: { _id: null } }] : []),
       { $group: { _id: null, total: { $sum: '$commissionAmount' } } },
     ]);
@@ -688,8 +756,9 @@ export const getAdminDashboard = async (req, res, next) => {
       {
         $match: {
           status: 'paid',
-          ...(franchiseMatch.franchise && { franchise: { $in: franchiseIds } }),
-          ...(isRegionalManager && !franchiseIds?.length && { _id: null }),
+          ...(isRegionalManager && franchiseIds?.length ? { franchise: { $in: franchiseIds } } : {}),
+          ...(!isRegionalManager && franchiseMatch.franchise ? { franchise: { $in: franchiseIds } } : {}),
+          ...(isRegionalManager && !franchiseIds?.length ? { _id: null } : {}),
         },
       },
       { $group: { _id: null, total: { $sum: '$netPayable' } } },
@@ -697,12 +766,14 @@ export const getAdminDashboard = async (req, res, next) => {
     const totalPayouts = payoutAggregation[0]?.total || 0;
 
     const leadStatusBreakdown = await Lead.aggregate([
-      ...(franchiseMatch.franchise ? [{ $match: { franchise: { $in: franchiseIds } } }] : []),
+      ...(isRegionalManager && Object.keys(leadMatch).length ? [{ $match: leadMatch }] : []),
+      ...(!isRegionalManager && franchiseMatch.franchise ? [{ $match: { associated: { $in: franchiseIds }, associatedModel: 'Franchise' } }] : []),
       { $group: { _id: '$status', count: { $sum: 1 } } },
     ]);
 
     const loanDistributionAgg = await Lead.aggregate([
-      ...(franchiseMatch.franchise ? [{ $match: { franchise: { $in: franchiseIds } } }] : []),
+      ...(isRegionalManager && Object.keys(leadMatch).length ? [{ $match: { ...leadMatch, loanType: { $exists: true, $ne: null } } }] : []),
+      ...(!isRegionalManager && franchiseMatch.franchise ? [{ $match: { associated: { $in: franchiseIds }, associatedModel: 'Franchise', loanType: { $exists: true, $ne: null } } }] : []),
       {
         $group: {
           _id: '$loanType',
@@ -737,7 +808,8 @@ export const getAdminDashboard = async (req, res, next) => {
     }));
 
     const totalLoanAmountAgg = await Lead.aggregate([
-      ...(Object.keys(franchiseMatch).length ? [{ $match: franchiseMatch }] : []),
+      ...(isRegionalManager && Object.keys(leadMatch).length ? [{ $match: leadMatch }] : []),
+      ...(!isRegionalManager && Object.keys(franchiseMatch).length ? [{ $match: { associated: { $in: franchiseIds }, associatedModel: 'Franchise' } }] : []),
       { $group: { _id: null, total: { $sum: '$loanAmount' } } },
     ]);
     const totalLoanAmount = totalLoanAmountAgg[0]?.total || 0;
@@ -761,28 +833,35 @@ export const getAdminDashboard = async (req, res, next) => {
       dateFilter = { createdAt: { $gte: yearAgo } };
     }
 
-    // Combine franchise match with date filter
-    const funnelMatch = { ...franchiseMatch, ...dateFilter };
+    // Combine lead match with date filter for regional managers, or franchise match for others
+    const funnelMatch = isRegionalManager 
+      ? { ...leadMatch, ...dateFilter }
+      : { ...franchiseMatch, ...dateFilter };
 
     // Calculate total amounts for each funnel stage instead of counts
+    // For regional managers, use leadMatch; for others, use proper associated query
+    const baseFunnelMatch = isRegionalManager 
+      ? leadMatch 
+      : (franchiseMatch.franchise ? { associated: { $in: franchiseIds }, associatedModel: 'Franchise' } : {});
+    
     const loggedAgg = await Lead.aggregate([
-      { $match: { ...funnelMatch, status: 'logged' } },
+      { $match: { ...baseFunnelMatch, ...dateFilter, status: 'logged' } },
       { $group: { _id: null, totalAmount: { $sum: '$loanAmount' } } }
     ]);
     const sanctionedAgg = await Lead.aggregate([
-      { $match: { ...funnelMatch, status: 'sanctioned' } },
+      { $match: { ...baseFunnelMatch, ...dateFilter, status: 'sanctioned' } },
       { $group: { _id: null, totalAmount: { $sum: '$loanAmount' } } }
     ]);
     const disbursedAgg = await Lead.aggregate([
-      { $match: { ...funnelMatch, status: { $in: ['partial_disbursed', 'disbursed'] } } },
+      { $match: { ...baseFunnelMatch, ...dateFilter, status: { $in: ['partial_disbursed', 'disbursed'] } } },
       { $group: { _id: null, totalAmount: { $sum: '$loanAmount' } } }
     ]);
     const completedAgg = await Lead.aggregate([
-      { $match: { ...funnelMatch, status: 'completed' } },
+      { $match: { ...baseFunnelMatch, ...dateFilter, status: 'completed' } },
       { $group: { _id: null, totalAmount: { $sum: '$loanAmount' } } }
     ]);
     const rejectedAgg = await Lead.aggregate([
-      { $match: { ...funnelMatch, status: 'rejected' } },
+      { $match: { ...baseFunnelMatch, ...dateFilter, status: 'rejected' } },
       { $group: { _id: null, totalAmount: { $sum: '$loanAmount' } } }
     ]);
     
@@ -794,9 +873,10 @@ export const getAdminDashboard = async (req, res, next) => {
       { stage: 'Rejected', value: rejectedAgg[0]?.totalAmount || 0, fill: '#b91c1c' },
     ];
 
-    const recentLeads = await Lead.find(
-      franchiseMatch.franchise ? { associated: { $in: franchiseIds }, associatedModel: 'Franchise' } : franchiseMatch
-    )
+    const recentLeadsQuery = isRegionalManager 
+      ? leadMatch 
+      : (franchiseMatch.franchise ? { associated: { $in: franchiseIds }, associatedModel: 'Franchise' } : franchiseMatch);
+    const recentLeads = await Lead.find(recentLeadsQuery)
       .populate('agent', 'name email')
       .populate('associated', 'name')
       .populate('referralFranchise', 'name')
@@ -804,11 +884,25 @@ export const getAdminDashboard = async (req, res, next) => {
       .sort({ createdAt: -1 })
       .limit(5);
 
-    const recentAgentsQuery = {
+    // For regional managers, get agents from their franchises or relationship managers
+    let recentAgentsQuery = {
       role: 'agent',
-      ...(franchiseMatch.franchise && { franchise: franchiseMatch.franchise }),
-      ...(isRegionalManager && !franchiseIds?.length && { _id: null }),
     };
+    if (isRegionalManager) {
+      if (franchiseIds?.length || rmIds.length) {
+        recentAgentsQuery.$or = [
+          ...(franchiseIds?.length ? [{ managedByModel: 'Franchise', managedBy: { $in: franchiseIds } }] : []),
+          ...(rmIds.length ? [{ managedByModel: 'RelationshipManager', managedBy: { $in: rmIds } }] : [])
+        ];
+      } else {
+        recentAgentsQuery._id = null; // No accessible agents
+      }
+    } else {
+      recentAgentsQuery = {
+        role: 'agent',
+        ...(franchiseMatch.franchise && { franchise: franchiseMatch.franchise }),
+      };
+    }
     const recentAgents = await User.find(recentAgentsQuery)
       .select('name email mobile status createdAt')
       .populate('franchise', 'name')
@@ -823,11 +917,9 @@ export const getAdminDashboard = async (req, res, next) => {
       .sort({ createdAt: -1 })
       .limit(5);
 
-    const recentInvoicesFilter = franchiseMatch.franchise
-      ? { franchise: franchiseMatch.franchise }
-      : isRegionalManager
-        ? { _id: null }
-        : {};
+    const recentInvoicesFilter = isRegionalManager
+      ? (franchiseIds?.length ? { franchise: { $in: franchiseIds } } : { _id: null })
+      : (franchiseMatch.franchise ? { franchise: franchiseMatch.franchise } : {});
     const recentInvoices = await Invoice.find(recentInvoicesFilter)
       .populate('agent', 'name email')
       .populate('franchise', 'name')
@@ -835,11 +927,9 @@ export const getAdminDashboard = async (req, res, next) => {
       .sort({ createdAt: -1 })
       .limit(5);
 
-    const recentPayoutsFilter = franchiseMatch.franchise
-      ? { franchise: franchiseMatch.franchise }
-      : isRegionalManager
-        ? { _id: null }
-        : {};
+    const recentPayoutsFilter = isRegionalManager
+      ? (franchiseIds?.length ? { franchise: { $in: franchiseIds } } : { _id: null })
+      : (franchiseMatch.franchise ? { franchise: franchiseMatch.franchise } : {});
     const recentPayouts = await Payout.find(recentPayoutsFilter)
       .populate('agent', 'name email')
       .populate('franchise', 'name')
@@ -862,10 +952,12 @@ export const getAdminDashboard = async (req, res, next) => {
     const sevenMonthsAgo = new Date();
     sevenMonthsAgo.setMonth(sevenMonthsAgo.getMonth() - 7);
 
-    const visitorDataMatch = {
-      createdAt: { $gte: sevenMonthsAgo },
-      ...(franchiseMatch.franchise && { franchise: { $in: franchiseIds } }),
-    };
+    const visitorDataMatch = isRegionalManager
+      ? { ...leadMatch, createdAt: { $gte: sevenMonthsAgo } }
+      : {
+          createdAt: { $gte: sevenMonthsAgo },
+          ...(franchiseMatch.franchise && { associated: { $in: franchiseIds }, associatedModel: 'Franchise' }),
+        };
     const visitorData = await Lead.aggregate([
       { $match: visitorDataMatch },
       {
