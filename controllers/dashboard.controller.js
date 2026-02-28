@@ -722,10 +722,10 @@ export const getAdminDashboard = async (req, res, next) => {
       totalAgents = await User.countDocuments(agentQuery);
     } else {
       totalAgents = await User.countDocuments({
-        role: 'agent',
-        status: 'active',
-        ...(franchiseMatch.franchise && { franchise: franchiseMatch.franchise }),
-      });
+      role: 'agent',
+      status: 'active',
+      ...(franchiseMatch.franchise && { franchise: franchiseMatch.franchise }),
+    });
     }
     const totalFranchises = isRegionalManager
       ? await Franchise.countDocuments({ status: 'active', regionalManager: req.user._id })
@@ -741,7 +741,7 @@ export const getAdminDashboard = async (req, res, next) => {
     } else {
       totalInvoices = franchiseMatch.franchise
         ? await Invoice.countDocuments({ franchise: franchiseMatch.franchise })
-        : await Invoice.countDocuments();
+          : await Invoice.countDocuments();
     }
 
     const commissionAggregation = await Invoice.aggregate([
@@ -899,9 +899,9 @@ export const getAdminDashboard = async (req, res, next) => {
       }
     } else {
       recentAgentsQuery = {
-        role: 'agent',
-        ...(franchiseMatch.franchise && { franchise: franchiseMatch.franchise }),
-      };
+      role: 'agent',
+      ...(franchiseMatch.franchise && { franchise: franchiseMatch.franchise }),
+    };
     }
     const recentAgents = await User.find(recentAgentsQuery)
       .select('name email mobile status createdAt')
@@ -955,9 +955,9 @@ export const getAdminDashboard = async (req, res, next) => {
     const visitorDataMatch = isRegionalManager
       ? { ...leadMatch, createdAt: { $gte: sevenMonthsAgo } }
       : {
-          createdAt: { $gte: sevenMonthsAgo },
+      createdAt: { $gte: sevenMonthsAgo },
           ...(franchiseMatch.franchise && { associated: { $in: franchiseIds }, associatedModel: 'Franchise' }),
-        };
+    };
     const visitorData = await Lead.aggregate([
       { $match: visitorDataMatch },
       {
