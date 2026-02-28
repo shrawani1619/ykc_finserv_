@@ -26,10 +26,16 @@ const form16Schema = new mongoose.Schema(
       required: true,
     },
 
-    // Attachment date
+    // User reference - Form 16 assigned to this user
+    user: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      index: true,
+    },
+
+    // Attachment date (optional now)
     attachmentDate: {
       type: Date,
-      required: true,
       index: true,
     },
 
@@ -55,6 +61,7 @@ const form16Schema = new mongoose.Schema(
 
 form16Schema.index({ formType: 1, attachmentDate: -1 });
 form16Schema.index({ status: 1, createdAt: -1 });
+form16Schema.index({ user: 1, createdAt: -1 });
 
 export default mongoose.model('Form16', form16Schema);
 

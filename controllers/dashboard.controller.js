@@ -86,6 +86,56 @@ export const getAgentDashboard = async (req, res, next) => {
       .sort({ escalatedAt: -1 })
       .limit(limitNum);
 
+    // Lead Conversion Funnel - Calculate total amounts for each stage
+    const { funnelPeriod = 'monthly' } = req.query;
+    const now = new Date();
+    let dateFilter = {};
+    
+    if (funnelPeriod === 'weekly') {
+      const weekAgo = new Date(now);
+      weekAgo.setDate(weekAgo.getDate() - 7);
+      dateFilter = { createdAt: { $gte: weekAgo } };
+    } else if (funnelPeriod === 'monthly') {
+      const monthAgo = new Date(now);
+      monthAgo.setMonth(monthAgo.getMonth() - 1);
+      dateFilter = { createdAt: { $gte: monthAgo } };
+    } else if (funnelPeriod === 'yearly') {
+      const yearAgo = new Date(now);
+      yearAgo.setFullYear(yearAgo.getFullYear() - 1);
+      dateFilter = { createdAt: { $gte: yearAgo } };
+    }
+
+    const agentFunnelMatch = { agent: agentId, ...dateFilter };
+    
+    const loggedAgg = await Lead.aggregate([
+      { $match: { ...agentFunnelMatch, status: 'logged' } },
+      { $group: { _id: null, totalAmount: { $sum: '$loanAmount' } } }
+    ]);
+    const sanctionedAgg = await Lead.aggregate([
+      { $match: { ...agentFunnelMatch, status: 'sanctioned' } },
+      { $group: { _id: null, totalAmount: { $sum: '$loanAmount' } } }
+    ]);
+    const disbursedAgg = await Lead.aggregate([
+      { $match: { ...agentFunnelMatch, status: { $in: ['partial_disbursed', 'disbursed'] } } },
+      { $group: { _id: null, totalAmount: { $sum: '$loanAmount' } } }
+    ]);
+    const completedAgg = await Lead.aggregate([
+      { $match: { ...agentFunnelMatch, status: 'completed' } },
+      { $group: { _id: null, totalAmount: { $sum: '$loanAmount' } } }
+    ]);
+    const rejectedAgg = await Lead.aggregate([
+      { $match: { ...agentFunnelMatch, status: 'rejected' } },
+      { $group: { _id: null, totalAmount: { $sum: '$loanAmount' } } }
+    ]);
+    
+    const leadConversionFunnel = [
+      { stage: 'Logged', value: loggedAgg[0]?.totalAmount || 0, fill: '#f97316' },
+      { stage: 'Sanctioned', value: sanctionedAgg[0]?.totalAmount || 0, fill: '#84cc16' },
+      { stage: 'Disbursed', value: disbursedAgg[0]?.totalAmount || 0, fill: '#3b82f6' },
+      { stage: 'Completed', value: completedAgg[0]?.totalAmount || 0, fill: '#ea580c' },
+      { stage: 'Rejected', value: rejectedAgg[0]?.totalAmount || 0, fill: '#b91c1c' },
+    ];
+
     res.status(200).json({
       success: true,
       data: {
@@ -109,6 +159,7 @@ export const getAgentDashboard = async (req, res, next) => {
         completedLeadsWithoutInvoices,
         pendingInvoicesForAction,
         escalatedInvoicesList,
+        leadConversionFunnel,
       },
     });
   } catch (error) {
@@ -236,32 +287,38 @@ export const getRelationshipManagerDashboard = async (req, res, next) => {
       dateFilter = { createdAt: { $gte: yearAgo } };
     }
 
-    const loggedCount = franchiseIds.length
-      ? await Lead.countDocuments({ associated: { $in: franchiseObjectIds }, associatedModel: 'Franchise', status: 'logged', ...dateFilter })
-      : 0;
-    const sanctionedCount = franchiseIds.length
-      ? await Lead.countDocuments({ associated: { $in: franchiseObjectIds }, associatedModel: 'Franchise', status: 'sanctioned', ...dateFilter })
-      : 0;
-    const disbursedCount = franchiseIds.length
-      ? await Lead.countDocuments({
-        associated: { $in: franchiseObjectIds },
-        associatedModel: 'Franchise',
-        status: { $in: ['partial_disbursed', 'disbursed'] },
-        ...dateFilter,
-      })
-      : 0;
-    const completedCount = franchiseIds.length
-      ? await Lead.countDocuments({ associated: { $in: franchiseObjectIds }, associatedModel: 'Franchise', status: 'completed', ...dateFilter })
-      : 0;
-    const rejectedCount = franchiseIds.length
-      ? await Lead.countDocuments({ associated: { $in: franchiseObjectIds }, associatedModel: 'Franchise', status: 'rejected', ...dateFilter })
-      : 0;
+    // Calculate total amounts for each funnel stage instead of counts
+    const funnelMatch = franchiseIds.length
+      ? { associated: { $in: franchiseObjectIds }, associatedModel: 'Franchise', ...dateFilter }
+      : { ...dateFilter };
+    
+    const loggedAgg = await Lead.aggregate([
+      { $match: { ...funnelMatch, status: 'logged' } },
+      { $group: { _id: null, totalAmount: { $sum: '$loanAmount' } } }
+    ]);
+    const sanctionedAgg = await Lead.aggregate([
+      { $match: { ...funnelMatch, status: 'sanctioned' } },
+      { $group: { _id: null, totalAmount: { $sum: '$loanAmount' } } }
+    ]);
+    const disbursedAgg = await Lead.aggregate([
+      { $match: { ...funnelMatch, status: { $in: ['partial_disbursed', 'disbursed'] } } },
+      { $group: { _id: null, totalAmount: { $sum: '$loanAmount' } } }
+    ]);
+    const completedAgg = await Lead.aggregate([
+      { $match: { ...funnelMatch, status: 'completed' } },
+      { $group: { _id: null, totalAmount: { $sum: '$loanAmount' } } }
+    ]);
+    const rejectedAgg = await Lead.aggregate([
+      { $match: { ...funnelMatch, status: 'rejected' } },
+      { $group: { _id: null, totalAmount: { $sum: '$loanAmount' } } }
+    ]);
+    
     const leadConversionFunnel = [
-      { stage: 'Logged', value: loggedCount, fill: '#f97316' },
-      { stage: 'Sanctioned', value: sanctionedCount, fill: '#84cc16' },
-      { stage: 'Disbursed', value: disbursedCount, fill: '#3b82f6' },
-      { stage: 'Completed', value: completedCount, fill: '#ea580c' },
-      { stage: 'Rejected', value: rejectedCount, fill: '#b91c1c' },
+      { stage: 'Logged', value: loggedAgg[0]?.totalAmount || 0, fill: '#f97316' },
+      { stage: 'Sanctioned', value: sanctionedAgg[0]?.totalAmount || 0, fill: '#84cc16' },
+      { stage: 'Disbursed', value: disbursedAgg[0]?.totalAmount || 0, fill: '#3b82f6' },
+      { stage: 'Completed', value: completedAgg[0]?.totalAmount || 0, fill: '#ea580c' },
+      { stage: 'Rejected', value: rejectedAgg[0]?.totalAmount || 0, fill: '#b91c1c' },
     ];
 
     const recentLeads = franchiseIds.length
@@ -453,6 +510,8 @@ export const getAccountsDashboard = async (req, res, next) => {
     const verifiedLeads = await Lead.countDocuments({ verificationStatus: 'verified' });
     const disbursedCases = await Lead.countDocuments({ status: { $in: ['disbursed', 'partial_disbursed', 'completed'] } });
     const activeAgents = await User.countDocuments({ role: 'agent', status: 'active' });
+    const totalFranchises = await Franchise.countDocuments({ status: 'active' });
+    const activeRelationshipManagers = await User.countDocuments({ role: 'relationship_manager', status: 'active' });
     const totalInvoices = await Invoice.countDocuments();
 
     // 2. Revenue (Commission Sum)
@@ -467,9 +526,15 @@ export const getAccountsDashboard = async (req, res, next) => {
     ]);
     const totalPendingPayoutAmount = pendingPayoutAggregation[0]?.total || 0;
 
-    // 3. Loan Distribution
+    // 3. Loan Distribution (count + total loan amount per type)
     const loanDistributionAgg = await Lead.aggregate([
-      { $group: { _id: '$loanType', count: { $sum: 1 } } },
+      {
+        $group: {
+          _id: '$loanType',
+          count: { $sum: 1 },
+          totalAmount: { $sum: '$loanAmount' },
+        },
+      },
       { $sort: { count: -1 } },
     ]);
     const totalForLoan = loanDistributionAgg.reduce((s, i) => s + i.count, 0) || 1;
@@ -487,8 +552,15 @@ export const getAccountsDashboard = async (req, res, next) => {
       name: loanTypeLabels[item._id] || item._id || 'Other',
       value: Math.round((item.count / totalForLoan) * 100),
       count: item.count,
+      totalAmount: item.totalAmount || 0,
       color: loanDistributionColors[idx % loanDistributionColors.length],
     }));
+
+    // 3b. Overall total loan amount for all leads
+    const totalLoanAmountAgg = await Lead.aggregate([
+      { $group: { _id: null, total: { $sum: '$loanAmount' } } },
+    ]);
+    const totalLoanAmount = totalLoanAmountAgg[0]?.total || 0;
 
     // 4. Lead Funnel
     // Get funnel period filter from query params (weekly, monthly, yearly)
@@ -521,10 +593,13 @@ export const getAccountsDashboard = async (req, res, next) => {
     const funnelColors = ['#f97316', '#84cc16', '#3b82f6', '#ea580c', '#dc2626'];
 
     const funnelData = await Promise.all(funnelSteps.map(async (step, idx) => {
-      const count = await Lead.countDocuments({ status: step, ...dateFilter });
+      const agg = await Lead.aggregate([
+        { $match: { status: step, ...dateFilter } },
+        { $group: { _id: null, totalAmount: { $sum: '$loanAmount' } } }
+      ]);
       return {
         name: funnelMap[step],
-        value: count,
+        value: agg[0]?.totalAmount || 0,
         fill: funnelColors[idx]
       };
     }));
@@ -547,8 +622,11 @@ export const getAccountsDashboard = async (req, res, next) => {
         verifiedLeads,
         disbursedCases,
         activeAgents,
+        totalFranchises,
+        activeRelationshipManagers,
         totalInvoices,
         totalRevenue,
+        totalLoanAmount,
         totalPendingPayoutAmount,
         loanDistribution,
         funnelData,
@@ -625,7 +703,13 @@ export const getAdminDashboard = async (req, res, next) => {
 
     const loanDistributionAgg = await Lead.aggregate([
       ...(franchiseMatch.franchise ? [{ $match: { franchise: { $in: franchiseIds } } }] : []),
-      { $group: { _id: '$loanType', count: { $sum: 1 } } },
+      {
+        $group: {
+          _id: '$loanType',
+          count: { $sum: 1 },
+          totalAmount: { $sum: '$loanAmount' },
+        },
+      },
       { $sort: { count: -1 } },
     ]);
     const totalForLoan = loanDistributionAgg.reduce((s, i) => s + i.count, 0) || 1;
@@ -643,6 +727,7 @@ export const getAdminDashboard = async (req, res, next) => {
       name: loanTypeLabels[item._id] || item._id,
       value: Math.round((item.count / totalForLoan) * 100),
       count: item.count,
+      totalAmount: item.totalAmount || 0,
       color: loanDistributionColors[idx % loanDistributionColors.length],
     }));
     const sumPct = loanDistributionRaw.reduce((s, i) => s + i.value, 0);
@@ -679,17 +764,34 @@ export const getAdminDashboard = async (req, res, next) => {
     // Combine franchise match with date filter
     const funnelMatch = { ...franchiseMatch, ...dateFilter };
 
-    const loggedCount = await Lead.countDocuments({ ...funnelMatch, status: 'logged' });
-    const sanctionedCount = await Lead.countDocuments({ ...funnelMatch, status: 'sanctioned' });
-    const disbursedCount = await Lead.countDocuments({ ...funnelMatch, status: { $in: ['partial_disbursed', 'disbursed'] } });
-    const completedCount = await Lead.countDocuments({ ...funnelMatch, status: 'completed' });
-    const rejectedCount = await Lead.countDocuments({ ...funnelMatch, status: 'rejected' });
+    // Calculate total amounts for each funnel stage instead of counts
+    const loggedAgg = await Lead.aggregate([
+      { $match: { ...funnelMatch, status: 'logged' } },
+      { $group: { _id: null, totalAmount: { $sum: '$loanAmount' } } }
+    ]);
+    const sanctionedAgg = await Lead.aggregate([
+      { $match: { ...funnelMatch, status: 'sanctioned' } },
+      { $group: { _id: null, totalAmount: { $sum: '$loanAmount' } } }
+    ]);
+    const disbursedAgg = await Lead.aggregate([
+      { $match: { ...funnelMatch, status: { $in: ['partial_disbursed', 'disbursed'] } } },
+      { $group: { _id: null, totalAmount: { $sum: '$loanAmount' } } }
+    ]);
+    const completedAgg = await Lead.aggregate([
+      { $match: { ...funnelMatch, status: 'completed' } },
+      { $group: { _id: null, totalAmount: { $sum: '$loanAmount' } } }
+    ]);
+    const rejectedAgg = await Lead.aggregate([
+      { $match: { ...funnelMatch, status: 'rejected' } },
+      { $group: { _id: null, totalAmount: { $sum: '$loanAmount' } } }
+    ]);
+    
     const leadConversionFunnel = [
-      { stage: 'Logged', value: loggedCount, fill: '#f97316' },
-      { stage: 'Sanctioned', value: sanctionedCount, fill: '#84cc16' },
-      { stage: 'Disbursed', value: disbursedCount, fill: '#3b82f6' },
-      { stage: 'Completed', value: completedCount, fill: '#ea580c' },
-      { stage: 'Rejected', value: rejectedCount, fill: '#b91c1c' },
+      { stage: 'Logged', value: loggedAgg[0]?.totalAmount || 0, fill: '#f97316' },
+      { stage: 'Sanctioned', value: sanctionedAgg[0]?.totalAmount || 0, fill: '#84cc16' },
+      { stage: 'Disbursed', value: disbursedAgg[0]?.totalAmount || 0, fill: '#3b82f6' },
+      { stage: 'Completed', value: completedAgg[0]?.totalAmount || 0, fill: '#ea580c' },
+      { stage: 'Rejected', value: rejectedAgg[0]?.totalAmount || 0, fill: '#b91c1c' },
     ];
 
     const recentLeads = await Lead.find(
@@ -1001,18 +1103,36 @@ export const getFranchiseOwnerDashboard = async (req, res, next) => {
       value: idx === 0 ? item.value + (100 - sumPctF) : item.value,
     }));
 
-    // Lead conversion funnel (filtered by franchise)
-    const loggedCountF = await Lead.countDocuments({ associated: franchiseObjectId, associatedModel: 'Franchise', status: 'logged' });
-    const sanctionedCountF = await Lead.countDocuments({ associated: franchiseObjectId, associatedModel: 'Franchise', status: 'sanctioned' });
-    const disbursedCountF = await Lead.countDocuments({ associated: franchiseObjectId, associatedModel: 'Franchise', status: { $in: ['partial_disbursed', 'disbursed'] } });
-    const completedCountF = await Lead.countDocuments({ associated: franchiseObjectId, associatedModel: 'Franchise', status: 'completed' });
-    const rejectedCountF = await Lead.countDocuments({ associated: franchiseObjectId, associatedModel: 'Franchise', status: 'rejected' });
+    // Lead conversion funnel (filtered by franchise) - Calculate total amounts instead of counts
+    const franchiseFunnelMatch = { associated: franchiseObjectId, associatedModel: 'Franchise' };
+    
+    const loggedAggF = await Lead.aggregate([
+      { $match: { ...franchiseFunnelMatch, status: 'logged' } },
+      { $group: { _id: null, totalAmount: { $sum: '$loanAmount' } } }
+    ]);
+    const sanctionedAggF = await Lead.aggregate([
+      { $match: { ...franchiseFunnelMatch, status: 'sanctioned' } },
+      { $group: { _id: null, totalAmount: { $sum: '$loanAmount' } } }
+    ]);
+    const disbursedAggF = await Lead.aggregate([
+      { $match: { ...franchiseFunnelMatch, status: { $in: ['partial_disbursed', 'disbursed'] } } },
+      { $group: { _id: null, totalAmount: { $sum: '$loanAmount' } } }
+    ]);
+    const completedAggF = await Lead.aggregate([
+      { $match: { ...franchiseFunnelMatch, status: 'completed' } },
+      { $group: { _id: null, totalAmount: { $sum: '$loanAmount' } } }
+    ]);
+    const rejectedAggF = await Lead.aggregate([
+      { $match: { ...franchiseFunnelMatch, status: 'rejected' } },
+      { $group: { _id: null, totalAmount: { $sum: '$loanAmount' } } }
+    ]);
+    
     const leadConversionFunnel = [
-      { stage: 'Logged', value: loggedCountF, fill: '#f97316' },
-      { stage: 'Sanctioned', value: sanctionedCountF, fill: '#84cc16' },
-      { stage: 'Disbursed', value: disbursedCountF, fill: '#3b82f6' },
-      { stage: 'Completed', value: completedCountF, fill: '#ea580c' },
-      { stage: 'Rejected', value: rejectedCountF, fill: '#b91c1c' },
+      { stage: 'Logged', value: loggedAggF[0]?.totalAmount || 0, fill: '#f97316' },
+      { stage: 'Sanctioned', value: sanctionedAggF[0]?.totalAmount || 0, fill: '#84cc16' },
+      { stage: 'Disbursed', value: disbursedAggF[0]?.totalAmount || 0, fill: '#3b82f6' },
+      { stage: 'Completed', value: completedAggF[0]?.totalAmount || 0, fill: '#ea580c' },
+      { stage: 'Rejected', value: rejectedAggF[0]?.totalAmount || 0, fill: '#b91c1c' },
     ];
 
     // Recent related lists (filtered by franchise)

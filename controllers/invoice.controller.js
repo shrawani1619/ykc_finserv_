@@ -17,7 +17,14 @@ export const getInvoices = async (req, res, next) => {
     
     // Role-based filtering
     if (req.user.role === 'agent') {
-      query.agent = req.user._id;
+            // Agents can see:
+      // 1. Their own agent invoices (invoiceType = 'agent' AND agent = their ID)
+      // 2. Sub-agent invoices where they are the sub-agent (invoiceType = 'sub_agent' AND subAgent = their ID)
+      // 3. Sub-agent invoices for their sub-agents (invoiceType = 'sub_agent' AND agent = their ID)
+      query.$or = [
+        { agent: req.user._id }, // Their own invoices (both agent and sub_agent types where they are the main agent)
+        { subAgent: req.user._id } // Invoices where they are the sub-agent
+      ];
     } else if (req.user.role === 'franchise') {
       // Franchise owners should only see invoices from their franchise
       if (!req.user.franchiseOwned) {
@@ -42,8 +49,16 @@ export const getInvoices = async (req, res, next) => {
     }
 
     if (status) query.status = status;
-    if (agentId) query.agent = agentId;
-    if (franchiseId && req.user.role !== 'regional_manager') query.franchise = franchiseId;
+    
+    // Additional filters - but respect role-based restrictions
+    if (agentId && req.user.role !== 'agent') {
+      // Only allow agentId filter if user is not an agent (agents already filtered above)
+      query.agent = agentId;
+    }
+    if (franchiseId && req.user.role !== 'regional_manager' && req.user.role !== 'franchise') {
+      // Only allow franchiseId filter if user is not a franchise (franchises already filtered above)
+      query.franchise = franchiseId;
+    }
 
     const invoices = await Invoice.find(query)
       .populate('agent', 'name email mobile city address kyc bankDetails')
@@ -81,9 +96,40 @@ export const getInvoiceById = async (req, res, next) => {
       });
     }
 
-    // NOTE: Role-based access checks removed to allow all authenticated users
-    // to view/download any invoice. If you need to reintroduce restrictions,
-    // add them here.
+    // Role-based access control
+    if (req.user.role === 'agent') {
+      // Agents can only view:
+      // 1. Their own agent invoices (invoiceType = 'agent' AND agent = their ID)
+      // 2. Sub-agent invoices where they are the sub-agent (invoiceType = 'sub_agent' AND subAgent = their ID)
+      // 3. Sub-agent invoices for their sub-agents (invoiceType = 'sub_agent' AND agent = their ID)
+      const agentId = req.user._id.toString();
+      const invoiceAgentId = invoice.agent?._id?.toString() || invoice.agent?.toString();
+      const invoiceSubAgentId = invoice.subAgent?._id?.toString() || invoice.subAgent?.toString();
+      
+      if (invoiceAgentId !== agentId && invoiceSubAgentId !== agentId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You can only view your own invoices and sub-agent invoices.',
+        });
+      }
+    } else if (req.user.role === 'franchise') {
+      // Franchises can only view invoices for their franchise
+      if (!req.user.franchiseOwned) {
+        return res.status(400).json({
+          success: false,
+          message: 'Franchise owner does not have an associated franchise',
+        });
+      }
+      const franchiseId = req.user.franchiseOwned.toString();
+      const invoiceFranchiseId = invoice.franchise?._id?.toString() || invoice.franchise?.toString();
+      
+      if (invoiceFranchiseId !== franchiseId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You can only view invoices for your franchise.',
+        });
+      }
+    }
 
     res.status(200).json({
       success: true,

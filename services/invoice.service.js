@@ -24,7 +24,8 @@ class InvoiceService {
           path: 'agent',
           populate: {
             path: 'managedBy',
-            model: 'Franchise'
+            // managedBy can be either Franchise or RelationshipManager
+            // We'll handle both cases in the logic below
           }
         })
         .populate('subAgent', 'name email')
@@ -44,21 +45,45 @@ class InvoiceService {
       // Get franchise from associated field (polymorphic)
       let franchiseId = null;
       let franchise = null;
+      
       if (lead.associatedModel === 'Franchise' && lead.associated) {
+        // Lead is directly associated with a Franchise
         franchiseId = lead.associated._id || lead.associated;
         franchise = await Franchise.findById(franchiseId);
-      } else {
-        // Try to get franchise from agent's managedBy if it's a Franchise
-        if (lead.agent && lead.agent.managedByModel === 'Franchise' && lead.agent.managedBy) {
-          franchiseId = lead.agent.managedBy._id || lead.agent.managedBy;
-          franchise = await Franchise.findById(franchiseId);
-        } else {
-          throw new Error('Franchise information not found for this lead');
+      } else if (lead.agent && lead.agent.managedByModel === 'Franchise' && lead.agent.managedBy) {
+        // Agent is directly managed by a Franchise
+        franchiseId = lead.agent.managedBy._id || lead.agent.managedBy;
+        franchise = await Franchise.findById(franchiseId);
+      } else if (lead.agent && lead.agent.managedByModel === 'RelationshipManager' && lead.agent.managedBy) {
+        // Agent is managed by a RelationshipManager - find franchise through regional manager
+        const RelationshipManager = (await import('../models/relationship.model.js')).default;
+        const rm = await RelationshipManager.findById(lead.agent.managedBy).select('regionalManager').lean();
+        
+        if (rm && rm.regionalManager) {
+          // Find franchises under this regional manager
+          const franchises = await Franchise.find({ regionalManager: rm.regionalManager }).limit(1);
+          if (franchises.length > 0) {
+            franchise = franchises[0];
+            franchiseId = franchise._id;
+          }
+        }
+      } else if (lead.associatedModel === 'RelationshipManager' && lead.associated) {
+        // Lead is associated with a RelationshipManager - find franchise through regional manager
+        const RelationshipManager = (await import('../models/relationship.model.js')).default;
+        const rm = await RelationshipManager.findById(lead.associated._id || lead.associated).select('regionalManager').lean();
+        
+        if (rm && rm.regionalManager) {
+          // Find franchises under this regional manager
+          const franchises = await Franchise.find({ regionalManager: rm.regionalManager }).limit(1);
+          if (franchises.length > 0) {
+            franchise = franchises[0];
+            franchiseId = franchise._id;
+          }
         }
       }
 
       if (!franchise) {
-        throw new Error('Franchise not found');
+        throw new Error('Franchise information not found for this lead. Please ensure the lead is associated with a franchise or the agent is managed by a franchise.');
       }
 
       let invoiceType = 'agent';
@@ -238,10 +263,11 @@ class InvoiceService {
           invoiceType = 'agent';
           
           // Use Agent Commission % set while creating the Lead
-          const agentCommissionPercentage = lead.agentCommissionPercentage || 0;
+          // Try agentCommissionPercentage first, then fallback to commissionPercentage
+          const agentCommissionPercentage = lead.agentCommissionPercentage || lead.commissionPercentage || 0;
           
           if (agentCommissionPercentage <= 0) {
-            throw new Error('Agent commission percentage is not set or is zero. Cannot generate agent invoice.');
+            throw new Error('Agent commission percentage is not set or is zero. Please set the commission percentage for this lead before generating an invoice.');
           }
 
           // Calculate: Agent Commission Amount = (Loan Amount × Agent Commission %) / 100
@@ -631,9 +657,9 @@ class InvoiceService {
             select: 'name'
           }
         })
-        .populate('agent', 'name email mobile city address kyc bankDetails')
-        .populate('subAgent', 'name email mobile city address kyc bankDetails')
-        .populate('franchise', 'name email mobile address kyc bankDetails')
+        .populate('agent', 'name email mobile city address kyc bankDetails agentType gst')
+        .populate('subAgent', 'name email mobile city address kyc bankDetails agentType gst')
+        .populate('franchise', 'name email mobile address kyc bankDetails franchiseType gst')
         .populate('payout')
         .populate('approvedBy', 'name email')
         .populate('rejectedBy', 'name email')
