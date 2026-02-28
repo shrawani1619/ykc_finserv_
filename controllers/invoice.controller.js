@@ -5,6 +5,16 @@ import { getRegionalManagerFranchiseIds, regionalManagerCanAccessFranchise } fro
 import { createNotification } from '../services/ticket.service.js';
 import User from '../models/user.model.js';
 
+// Gross = Taxable + GST - TDS (GST 18%, TDS 2% of Taxable)
+const GST_RATE = 18;
+const TDS_RATE = 2;
+function computeInvoiceAmounts(taxable, tdsPercentage = TDS_RATE) {
+  const gstAmount = (taxable * GST_RATE) / 100;
+  const tdsAmount = (taxable * tdsPercentage) / 100;
+  const netPayable = taxable + gstAmount - tdsAmount;
+  return { gstAmount, tdsAmount, netPayable };
+}
+
 /**
  * Get all invoices
  */
@@ -427,7 +437,15 @@ export const createInvoice = async (req, res, next) => {
         });
       }
     }
-    const invoice = await Invoice.create(req.body);
+    const body = { ...req.body };
+    if (body.commissionAmount != null && body.commissionAmount > 0) {
+      const tdsPct = body.tdsPercentage != null ? body.tdsPercentage : TDS_RATE;
+      const amounts = computeInvoiceAmounts(Number(body.commissionAmount), tdsPct);
+      body.gstAmount = amounts.gstAmount;
+      body.tdsAmount = amounts.tdsAmount;
+      body.netPayable = amounts.netPayable;
+    }
+    const invoice = await Invoice.create(body);
 
     const populatedInvoice = await Invoice.findById(invoice._id)
       .populate('lead', 'loanAccountNo loanType')
@@ -483,8 +501,17 @@ export const updateInvoice = async (req, res, next) => {
     const previousStatus = previousInvoice.status;
     const newStatus = req.body.status;
 
+    const body = { ...req.body };
+    if (body.commissionAmount != null && body.commissionAmount > 0) {
+      const tdsPct = body.tdsPercentage != null ? body.tdsPercentage : (previousInvoice.tdsPercentage ?? TDS_RATE);
+      const amounts = computeInvoiceAmounts(Number(body.commissionAmount), tdsPct);
+      body.gstAmount = amounts.gstAmount;
+      body.tdsAmount = amounts.tdsAmount;
+      body.netPayable = amounts.netPayable;
+    }
+
     // Update the invoice
-    const invoice = await Invoice.findByIdAndUpdate(req.params.id, req.body, {
+    const invoice = await Invoice.findByIdAndUpdate(req.params.id, body, {
       new: true,
       runValidators: true,
     })

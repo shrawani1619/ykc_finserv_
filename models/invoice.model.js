@@ -72,6 +72,12 @@ const invoiceSchema = new mongoose.Schema(
       default: 2, // 2% TDS
     },
 
+    // GST = 18% of Taxable (commission). Gross = Taxable + GST - TDS
+    gstAmount: {
+      type: Number,
+      default: 0,
+    },
+
     netPayable: {
       type: Number,
       required: true,

@@ -5,6 +5,17 @@ import FranchiseCommissionLimit from '../models/franchiseCommissionLimit.model.j
 import User from '../models/user.model.js';
 import { generateInvoiceNumber } from '../utils/helpers.js';
 
+// Invoice amount formula: Commission (Taxable) = Loan Amount × Rate%; GST = 18% of Taxable; TDS = 2% of Taxable; Gross = Taxable + GST - TDS
+const GST_RATE = 18;
+const TDS_RATE = 2;
+
+function computeInvoiceAmounts(taxable, tdsPercentage = TDS_RATE) {
+  const gstAmount = (taxable * GST_RATE) / 100;
+  const tdsAmount = (taxable * tdsPercentage) / 100;
+  const netPayable = taxable + gstAmount - tdsAmount; // Gross amount
+  return { gstAmount, tdsAmount, netPayable };
+}
+
 /**
  * Invoice Service
  * Handles invoice generation, approval workflow, and TDS calculation
@@ -163,12 +174,16 @@ class InvoiceService {
             throw new Error('Calculated commission amounts are zero. Cannot generate invoices.');
           }
 
-          // Calculate TDS for both invoices (2%)
-          const tdsPercentage = 2;
-          const agentTdsAmount = (agentCommissionAmount * tdsPercentage) / 100;
-          const subAgentTdsAmount = (subAgentCommissionAmount * tdsPercentage) / 100;
-          const agentNetPayable = agentCommissionAmount - agentTdsAmount;
-          const subAgentNetPayable = subAgentCommissionAmount - subAgentTdsAmount;
+          // Gross = Taxable + GST - TDS (GST 18%, TDS 2%)
+          const tdsPercentage = TDS_RATE;
+          const agentAmounts = computeInvoiceAmounts(agentCommissionAmount, tdsPercentage);
+          const subAgentAmounts = computeInvoiceAmounts(subAgentCommissionAmount, tdsPercentage);
+          const agentTdsAmount = agentAmounts.tdsAmount;
+          const subAgentTdsAmount = subAgentAmounts.tdsAmount;
+          const agentNetPayable = agentAmounts.netPayable;
+          const subAgentNetPayable = subAgentAmounts.netPayable;
+          const agentGstAmount = agentAmounts.gstAmount;
+          const subAgentGstAmount = subAgentAmounts.gstAmount;
 
           // Generate invoice numbers
           const agentInvoiceNumber = await generateInvoiceNumber();
@@ -182,6 +197,7 @@ class InvoiceService {
             franchise: franchiseId,
             invoiceType: 'agent',
             commissionAmount: agentCommissionAmount,
+            gstAmount: agentGstAmount,
             tdsAmount: agentTdsAmount,
             tdsPercentage,
             netPayable: agentNetPayable,
@@ -237,6 +253,7 @@ class InvoiceService {
             franchise: franchiseId,
             invoiceType: 'sub_agent',
             commissionAmount: subAgentCommissionAmount, // Uses agent-decided subAgentCommissionPercentage from lead
+            gstAmount: subAgentGstAmount,
             tdsAmount: subAgentTdsAmount,
             tdsPercentage,
             netPayable: subAgentNetPayable,
@@ -287,10 +304,9 @@ class InvoiceService {
             throw new Error('Agent invoice already exists for this lead. Duplicate invoice generation prevented.');
           }
 
-          // Calculate TDS (2%)
-          const tdsPercentage = 2;
-          const tdsAmount = (commissionAmount * tdsPercentage) / 100;
-          const netPayable = commissionAmount - tdsAmount;
+          // Gross = Taxable + GST - TDS (GST 18%, TDS 2%)
+          const tdsPercentage = TDS_RATE;
+          const amounts = computeInvoiceAmounts(commissionAmount, tdsPercentage);
 
           // Generate invoice number
           const invoiceNumber = await generateInvoiceNumber();
@@ -303,9 +319,10 @@ class InvoiceService {
             franchise: franchiseId,
             invoiceType,
             commissionAmount,
-            tdsAmount,
+            gstAmount: amounts.gstAmount,
+            tdsAmount: amounts.tdsAmount,
             tdsPercentage,
-            netPayable,
+            netPayable: amounts.netPayable,
             status: 'pending',
             invoiceDate: new Date(),
           });
@@ -389,10 +406,9 @@ class InvoiceService {
           throw new Error('Main franchise invoice already exists for this lead. Duplicate invoice generation prevented.');
         }
 
-        // Calculate TDS (2%)
-        const tdsPercentage = 2;
-        const tdsAmount = (commissionAmount * tdsPercentage) / 100;
-        const netPayable = commissionAmount - tdsAmount;
+        // Gross = Taxable + GST - TDS (GST 18%, TDS 2%)
+        const tdsPercentage = TDS_RATE;
+        const amounts = computeInvoiceAmounts(commissionAmount, tdsPercentage);
 
         // Generate invoice number
         const invoiceNumber = await generateInvoiceNumber();
@@ -405,9 +421,10 @@ class InvoiceService {
           franchise: franchiseId,
           invoiceType,
           commissionAmount,
-          tdsAmount,
+          gstAmount: amounts.gstAmount,
+          tdsAmount: amounts.tdsAmount,
           tdsPercentage,
-          netPayable,
+          netPayable: amounts.netPayable,
           status: 'pending',
           invoiceDate: new Date(),
         });
@@ -437,10 +454,8 @@ class InvoiceService {
             });
 
             if (!existingReferralInvoice) {
-              // Calculate TDS (2%) for referral franchise
-              const referralTdsPercentage = 2;
-              const referralTdsAmount = (referralCommissionAmount * referralTdsPercentage) / 100;
-              const referralNetPayable = referralCommissionAmount - referralTdsAmount;
+              // Gross = Taxable + GST - TDS for referral franchise
+              const referralAmounts = computeInvoiceAmounts(referralCommissionAmount, TDS_RATE);
 
               // Generate invoice number for referral franchise
               const referralInvoiceNumber = await generateInvoiceNumber();
@@ -454,9 +469,10 @@ class InvoiceService {
                 invoiceType: 'franchise',
                 isReferralFranchise: true, // Mark as referral franchise invoice
                 commissionAmount: referralCommissionAmount,
-                tdsAmount: referralTdsAmount,
-                tdsPercentage: referralTdsPercentage,
-                netPayable: referralNetPayable,
+                gstAmount: referralAmounts.gstAmount,
+                tdsAmount: referralAmounts.tdsAmount,
+                tdsPercentage: TDS_RATE,
+                netPayable: referralAmounts.netPayable,
                 status: 'pending',
                 invoiceDate: new Date(),
               });
@@ -560,11 +576,13 @@ class InvoiceService {
         throw new Error('Invoice is not in escalated status');
       }
 
-      // Apply adjustments if provided
+      // Apply adjustments if provided (Gross = Taxable + GST - TDS)
       if (adjustments.commissionAmount) {
         invoice.commissionAmount = adjustments.commissionAmount;
-        invoice.tdsAmount = (adjustments.commissionAmount * invoice.tdsPercentage) / 100;
-        invoice.netPayable = adjustments.commissionAmount - invoice.tdsAmount;
+        const amounts = computeInvoiceAmounts(adjustments.commissionAmount, invoice.tdsPercentage || TDS_RATE);
+        invoice.gstAmount = amounts.gstAmount;
+        invoice.tdsAmount = amounts.tdsAmount;
+        invoice.netPayable = amounts.netPayable;
       }
 
       invoice.status = 'pending';
