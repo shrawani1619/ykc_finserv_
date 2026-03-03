@@ -9,7 +9,7 @@ const companySettingsSchema = new mongoose.Schema(
     companyName: {
       type: String,
       required: true,
-      default: 'YKC FINANCIAL SERVICES',
+      default: 'YKC finserv PVT. LTD',
     },
     address: {
       type: String,

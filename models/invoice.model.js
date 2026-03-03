@@ -86,7 +86,7 @@ const invoiceSchema = new mongoose.Schema(
     // Invoice status workflow
     status: {
       type: String,
-      enum: ['draft', 'pending', 'approved', 'rejected', 'escalated', 'gst_paid', 'paid'],
+      enum: ['draft', 'pending', 'approved', 'rejected', 'escalated', 'gst_paid', 'paid', 'regular_paid'],
       default: 'pending',
       index: true,
     },

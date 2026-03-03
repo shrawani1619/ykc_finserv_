@@ -4,6 +4,7 @@ import Invoice from '../models/invoice.model.js';
 import { getRegionalManagerFranchiseIds, regionalManagerCanAccessFranchise } from '../utils/regionalScope.js';
 import { createNotification } from '../services/ticket.service.js';
 import User from '../models/user.model.js';
+import Franchise from '../models/franchise.model.js';
 
 // Gross = Taxable + GST - TDS (GST 18%, TDS 2% of Taxable)
 const GST_RATE = 18;
@@ -56,17 +57,71 @@ export const getInvoices = async (req, res, next) => {
       query.franchise = franchiseId && franchiseIds.some((fid) => fid.toString() === franchiseId)
         ? franchiseId
         : { $in: franchiseIds };
+    } else if (req.user.role === 'relationship_manager') {
+      // Relationship managers see only invoices for agents they manage (agent or subAgent)
+      const RM = (await import('../models/relationship.model.js')).default;
+      let rmId = req.user.relationshipManagerOwned;
+      if (!rmId && RM) {
+        const rmDoc = await RM.findOne({ owner: req.user._id }).select('_id').lean();
+        if (rmDoc) rmId = rmDoc._id;
+      }
+      if (!rmId) {
+        return res.status(200).json({
+          success: true,
+          data: [],
+          pagination: getPaginationMeta(page, limit, 0),
+        });
+      }
+      const agentIds = await User.find({
+        role: 'agent',
+        managedByModel: 'RelationshipManager',
+        managedBy: rmId,
+      })
+        .select('_id')
+        .lean();
+      const ids = (agentIds || []).map((a) => a._id);
+      if (ids.length === 0) {
+        return res.status(200).json({
+          success: true,
+          data: [],
+          pagination: getPaginationMeta(page, limit, 0),
+        });
+      }
+      query.$or = [{ agent: { $in: ids } }, { subAgent: { $in: ids } }];
+    } else if (req.user.role === 'accounts_manager') {
+      // Accountants see only invoices for franchises under their assigned regional managers
+      const { getAccountantAssignedRegionalManagerIds } = await import('../utils/accountantScope.js');
+      const assignedRMIds = await getAccountantAssignedRegionalManagerIds(req);
+      if (!assignedRMIds || assignedRMIds.length === 0) {
+        return res.status(200).json({
+          success: true,
+          data: [],
+          pagination: getPaginationMeta(page, limit, 0),
+        });
+      }
+      const franchiseIds = await Franchise.find({
+        regionalManager: { $in: assignedRMIds },
+      })
+        .distinct('_id')
+        .lean();
+      if (!franchiseIds || franchiseIds.length === 0) {
+        return res.status(200).json({
+          success: true,
+          data: [],
+          pagination: getPaginationMeta(page, limit, 0),
+        });
+      }
+      query.franchise = { $in: franchiseIds };
     }
+    // super_admin: no extra query restriction (sees all)
 
     if (status) query.status = status;
     
-    // Additional filters - but respect role-based restrictions
-    if (agentId && req.user.role !== 'agent') {
-      // Only allow agentId filter if user is not an agent (agents already filtered above)
+    // Additional filters - only when they don't overwrite role-based scope
+    if (agentId && req.user.role !== 'agent' && req.user.role !== 'relationship_manager') {
       query.agent = agentId;
     }
-    if (franchiseId && req.user.role !== 'regional_manager' && req.user.role !== 'franchise') {
-      // Only allow franchiseId filter if user is not a franchise (franchises already filtered above)
+    if (franchiseId && req.user.role !== 'regional_manager' && req.user.role !== 'franchise' && req.user.role !== 'accounts_manager') {
       query.franchise = franchiseId;
     }
 
@@ -119,7 +174,7 @@ export const getInvoiceById = async (req, res, next) => {
       if (invoiceAgentId !== agentId && invoiceSubAgentId !== agentId) {
         return res.status(403).json({
           success: false,
-          message: 'Access denied. You can only view your own invoices and sub-agent invoices.',
+          message: 'Access denied. You can only view your own invoices and sub-partner invoices.',
         });
       }
     } else if (req.user.role === 'franchise') {
@@ -367,7 +422,7 @@ export const generateInvoiceFromLead = async (req, res, next) => {
 
       return res.status(201).json({
         success: true,
-        message: 'Split invoices generated successfully (Agent and SubAgent)',
+        message: 'Split invoices generated successfully (Partner and Sub Partner)',
         data: {
           agentInvoice: populatedAgentInvoice,
           subAgentInvoice: populatedSubAgentInvoice,

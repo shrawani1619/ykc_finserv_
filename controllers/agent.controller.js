@@ -38,7 +38,7 @@ export const createAgent = async (req, res, next) => {
         if (!allowed) {
           return res.status(403).json({
             success: false,
-            message: 'You can only create agents under franchises assigned to you. Select a franchise from the list.',
+            message: 'You can only create partners under franchises assigned to you. Select a franchise from the list.',
           });
         }
       } else if (requestedModel === 'RelationshipManager') {
@@ -49,7 +49,7 @@ export const createAgent = async (req, res, next) => {
           if (rmDoc && rmDoc.regionalManager && rmDoc.regionalManager.toString() !== req.user._id.toString()) {
             return res.status(403).json({
               success: false,
-              message: 'You can only assign agents to relationship managers in your region.',
+              message: 'You can only assign partners to relationship managers in your region.',
             });
           }
         }
@@ -183,7 +183,7 @@ export const getAgentById = async (req, res, next) => {
     if (!agent) {
       return res.status(404).json({
         success: false,
-        error: 'Agent not found',
+        error: 'Partner not found',
       });
     }
 
@@ -205,7 +205,7 @@ export const getAgentById = async (req, res, next) => {
       if (agent.managedBy?.toString() !== req.user.franchiseOwned.toString()) {
         return res.status(403).json({
           success: false,
-          error: 'Access denied. You can only view agents from your franchise.',
+          error: 'Access denied. You can only view partners from your franchise.',
         });
       }
     }
@@ -220,7 +220,7 @@ export const getAgentById = async (req, res, next) => {
       if (!rmId || agent.managedBy?.toString() !== rmId.toString()) {
         return res.status(403).json({
           success: false,
-          error: 'Access denied. You can only view agents associated with you.',
+          error: 'Access denied. You can only view partners associated with you.',
         });
       }
     }
@@ -235,7 +235,7 @@ export const getAgentById = async (req, res, next) => {
       if (!canAccess) {
         return res.status(403).json({
           success: false,
-          error: 'Access denied. You can only view agents from your hierarchy.',
+          error: 'Access denied. You can only view partners from your hierarchy.',
         });
       }
     }
@@ -259,7 +259,7 @@ export const updateAgent = async (req, res, next) => {
     if (!existingAgent) {
       return res.status(404).json({
         success: false,
-        error: 'Agent not found',
+        error: 'Partner not found',
       });
     }
 
@@ -274,7 +274,7 @@ export const updateAgent = async (req, res, next) => {
       if (existingAgent.managedBy?.toString() !== req.user.franchiseOwned.toString()) {
         return res.status(403).json({
           success: false,
-          error: 'Access denied. You can only update agents from your franchise.',
+          error: 'Access denied. You can only update partners from your franchise.',
         });
       }
     }
@@ -289,7 +289,7 @@ export const updateAgent = async (req, res, next) => {
       if (!rmId || existingAgent.managedBy?.toString() !== rmId.toString()) {
         return res.status(403).json({
           success: false,
-          error: 'Access denied. You can only update agents associated with you.',
+          error: 'Access denied. You can only update partners associated with you.',
         });
       }
     }
@@ -352,7 +352,7 @@ export const updateAgentStatus = async (req, res, next) => {
     if (!existingAgent) {
       return res.status(404).json({
         success: false,
-        error: 'Agent not found',
+        error: 'Partner not found',
       });
     }
 
@@ -367,7 +367,7 @@ export const updateAgentStatus = async (req, res, next) => {
       if (existingAgent.managedBy?.toString() !== req.user.franchiseOwned.toString()) {
         return res.status(403).json({
           success: false,
-          error: 'Access denied. You can only update agents from your franchise.',
+          error: 'Access denied. You can only update partners from your franchise.',
         });
       }
     }
@@ -406,7 +406,7 @@ export const updateAgentStatus = async (req, res, next) => {
       if (!rmId || existingAgent.managedBy?.toString() !== rmId.toString()) {
         return res.status(403).json({
           success: false,
-          error: 'Access denied. You can only update agents associated with you.',
+          error: 'Access denied. You can only update partners associated with you.',
         });
       }
     }

@@ -127,7 +127,7 @@ class InvoiceService {
           });
           
           if (agentCommissionPercentage <= 0) {
-            throw new Error('Agent commission percentage is not set or is zero. Cannot generate split invoices.');
+            throw new Error('Partner commission percentage is not set or is zero. Cannot generate split invoices.');
           }
 
           if (subAgentCommissionPercentage <= 0) {
@@ -301,7 +301,7 @@ class InvoiceService {
           });
 
           if (existingAgentInvoice) {
-            throw new Error('Agent invoice already exists for this lead. Duplicate invoice generation prevented.');
+            throw new Error('Partner invoice already exists for this lead. Duplicate invoice generation prevented.');
           }
 
           // Gross = Taxable + GST - TDS (GST 18%, TDS 2%)

@@ -106,10 +106,17 @@ class FileUploadService {
           api_secret: CLOUDINARY_API_SECRET,
         });
 
+        // Choose appropriate Cloudinary resource type based on mime type.
+        // PDFs and other non-image docs should use 'raw' so they can be viewed/downloaded correctly.
+        let resourceType = 'auto';
+        if (file.mimetype === 'application/pdf') {
+          resourceType = 'raw';
+        }
+
         // upload buffer via upload_stream using streamifier for reliability
         uploadResult = await new Promise((resolve, reject) => {
           const stream = cloudinary.uploader.upload_stream(
-            { resource_type: 'auto', folder: 'documents' },
+            { resource_type: resourceType, folder: 'documents' },
             (error, result) => {
               if (error) {
                 console.error('Cloudinary upload callback error:', error && error.stack ? error.stack : error);

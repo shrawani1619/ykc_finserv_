@@ -40,7 +40,7 @@ export const getAgentDashboard = async (req, res, next) => {
     const escalatedInvoices = await Invoice.countDocuments({ agent: agentId, status: 'escalated' });
 
     const pendingPayouts = await Payout.countDocuments({ agent: agentId, status: 'pending' });
-    const paidPayouts = await Payout.countDocuments({ agent: agentId, status: 'paid' });
+    const paidPayouts = await Payout.countDocuments({ agent: agentId, status: { $in: ['complete', 'payment_received'] } });
 
     const commissionAggregation = await Invoice.aggregate([
       { $match: { agent: agentId } },
@@ -755,7 +755,7 @@ export const getAdminDashboard = async (req, res, next) => {
     const payoutAggregation = await Payout.aggregate([
       {
         $match: {
-          status: 'paid',
+          status: { $in: ['complete', 'payment_received'] },
           ...(isRegionalManager && franchiseIds?.length ? { franchise: { $in: franchiseIds } } : {}),
           ...(!isRegionalManager && franchiseMatch.franchise ? { franchise: { $in: franchiseIds } } : {}),
           ...(isRegionalManager && !franchiseIds?.length ? { _id: null } : {}),
@@ -1155,7 +1155,7 @@ export const getFranchiseOwnerDashboard = async (req, res, next) => {
     const totalCommission = commissionAggregation[0]?.total || 0;
 
     const payoutAggregation = await Payout.aggregate([
-      { $match: { franchise: franchiseObjectId, status: 'paid' } },
+      { $match: { franchise: franchiseObjectId, status: { $in: ['complete', 'payment_received'] } } },
       { $group: { _id: null, total: { $sum: '$netPayable' } } },
     ]);
     const totalPayouts = payoutAggregation[0]?.total || 0;

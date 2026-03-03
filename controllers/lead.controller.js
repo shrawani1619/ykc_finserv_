@@ -315,7 +315,7 @@ export const createLead = async (req, res, next) => {
     if (leadData.agent && !mongoose.Types.ObjectId.isValid(leadData.agent)) {
       return res.status(400).json({
         success: false,
-        error: 'Invalid agent ID format',
+        error: 'Invalid partner ID format',
       });
     }
     if (leadData.associated && !mongoose.Types.ObjectId.isValid(leadData.associated)) {
@@ -327,7 +327,7 @@ export const createLead = async (req, res, next) => {
     if (leadData.subAgent && !mongoose.Types.ObjectId.isValid(leadData.subAgent)) {
       return res.status(400).json({
         success: false,
-        error: 'Invalid sub-agent ID format',
+        error: 'Invalid sub-partner ID format',
       });
     }
 
@@ -344,7 +344,7 @@ export const createLead = async (req, res, next) => {
           if (!subAgent) {
             return res.status(403).json({
               success: false,
-              error: 'Sub-agent not found or does not belong to you',
+              error: 'Sub-partner not found or does not belong to you',
             });
           }
           // Get sub-agent name
@@ -882,7 +882,7 @@ export const updateLead = async (req, res, next) => {
     if (updateData.agent && !mongoose.Types.ObjectId.isValid(updateData.agent)) {
       return res.status(400).json({
         success: false,
-        error: 'Invalid agent ID format',
+        error: 'Invalid partner ID format',
       });
     }
 
@@ -958,7 +958,7 @@ export const updateLeadStatus = async (req, res, next) => {
       if (status && status !== 'disbursed') {
         return res.status(403).json({
           success: false,
-          error: 'Access denied. Agents can only mark leads as DISBURSED.',
+          error: 'Access denied. Partners can only mark leads as DISBURSED.',
         });
       }
       // If status is disbursed, allow it
@@ -1834,7 +1834,7 @@ export const getDisbursementEmailPreview = async (req, res, next) => {
     if (req.user.role === 'agent') {
       return res.status(403).json({
         success: false,
-        error: 'Access denied. Agents cannot access this feature.',
+        error: 'Access denied. Partners cannot access this feature.',
       });
     }
 
@@ -2137,7 +2137,7 @@ export const sendDisbursementEmail = async (req, res, next) => {
     if (req.user.role === 'agent') {
       return res.status(403).json({
         success: false,
-        error: 'Access denied. Agents cannot send this email.',
+        error: 'Access denied. Partners cannot send this email.',
       });
     }
 

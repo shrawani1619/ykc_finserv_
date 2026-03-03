@@ -114,7 +114,7 @@ class PayoutService {
         generatedBy: userId,
       };
 
-      payout.status = 'processing';
+      payout.status = 'payment_pending';
       await payout.save();
 
       return payout;
@@ -137,11 +137,11 @@ class PayoutService {
         throw new Error('Payout not found');
       }
 
-      if (payout.status === 'paid') {
-        throw new Error('Payout is already marked as paid');
+      if (payout.status === 'complete') {
+        throw new Error('Payout is already marked as complete');
       }
 
-      payout.status = 'paid';
+      payout.status = 'complete';
       payout.paymentConfirmation = {
         transactionId: paymentData.transactionId,
         transactionDate: paymentData.transactionDate || new Date(),
@@ -179,7 +179,7 @@ class PayoutService {
         throw new Error('Payout not found');
       }
 
-      payout.status = 'failed';
+      payout.status = 'recovery_pending';
       payout.remarks = remarks;
       await payout.save();
 

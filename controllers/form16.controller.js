@@ -7,6 +7,14 @@ export const createForm16 = async (req, res, next) => {
   try {
     const { formType, attachmentName, attachment, attachmentDate, fileName, fileSize, mimeType, user } = req.body;
 
+    const userRole = req.user.role;
+    if (userRole !== 'super_admin' && userRole !== 'accounts_manager') {
+      return res.status(403).json({
+        success: false,
+        error: 'Only admin or accounts manager can create Form 16 / TDS records',
+      });
+    }
+
     if (!attachment) {
       return res.status(400).json({
         success: false,
@@ -79,6 +87,16 @@ export const getForm16ById = async (req, res, next) => {
       });
     }
 
+    const userRole = req.user.role;
+    if (userRole !== 'super_admin' && userRole !== 'accounts_manager') {
+      if (form.user?.toString && form.user.toString() !== req.user._id.toString()) {
+        return res.status(403).json({
+          success: false,
+          error: 'You are not authorized to view this Form 16 / TDS record',
+        });
+      }
+    }
+
     res.status(200).json({
       success: true,
       data: form,
@@ -94,6 +112,14 @@ export const getForm16ById = async (req, res, next) => {
 export const updateForm16 = async (req, res, next) => {
   try {
     const { formType, attachmentName, attachment, attachmentDate, fileName, fileSize, mimeType, status, user } = req.body;
+
+    const userRole = req.user.role;
+    if (userRole !== 'super_admin' && userRole !== 'accounts_manager') {
+      return res.status(403).json({
+        success: false,
+        error: 'Only admin or accounts manager can update Form 16 / TDS records',
+      });
+    }
 
     const form = await Form16.findById(req.params.id);
 
@@ -131,6 +157,14 @@ export const updateForm16 = async (req, res, next) => {
  */
 export const deleteForm16 = async (req, res, next) => {
   try {
+    const userRole = req.user.role;
+    if (userRole !== 'super_admin' && userRole !== 'accounts_manager') {
+      return res.status(403).json({
+        success: false,
+        error: 'Only admin or accounts manager can delete Form 16 / TDS records',
+      });
+    }
+
     const form = await Form16.findById(req.params.id);
 
     if (!form) {

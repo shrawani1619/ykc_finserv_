@@ -54,7 +54,16 @@ const payoutSchema = new mongoose.Schema(
     // Payout status
     status: {
       type: String,
-      enum: ['pending', 'processing', 'paid', 'failed', 'recovery'],
+      enum: [
+        'pending',
+        'gst_pending',
+        'gst_received',
+        'payment_received',
+        'payment_pending',
+        'recovery_pending',
+        'recovery_received',
+        'complete',
+      ],
       default: 'pending',
       index: true,
     },

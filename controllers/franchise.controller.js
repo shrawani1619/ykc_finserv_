@@ -152,19 +152,15 @@ export const createFranchise = async (req, res, next) => {
  */
 export const getFranchises = async (req, res, next) => {
   try {
-    // Relationship managers should not have access to franchise listings
-    if (req.user?.role === 'relationship_manager') {
-      return res.status(403).json({
-        success: false,
-        message: 'Access denied.',
-      });
-    }
     const { page = 1, limit = 10, status } = req.query;
     const skip = (page - 1) * limit;
 
     const query = {};
     if (status) query.status = status;
-    if (req.user.role === 'accounts_manager') {
+    // Relationship managers can fetch franchises (e.g. for Refer Franchise dropdown when creating leads)
+    if (req.user?.role === 'relationship_manager') {
+      // No extra scope: allow list for refer-franchise use case
+    } else if (req.user.role === 'accounts_manager') {
       // Accountant can only see franchises under assigned Regional Managers
       const { getAccountantAssignedRegionalManagerIds } = await import('../utils/accountantScope.js');
       const assignedRMIds = await getAccountantAssignedRegionalManagerIds(req);
@@ -205,13 +201,6 @@ export const getFranchises = async (req, res, next) => {
  */
 export const getActiveFranchises = async (req, res, next) => {
   try {
-    // Relationship managers should not have access to franchise listings
-    if (req.user?.role === 'relationship_manager') {
-      return res.status(403).json({
-        success: false,
-        message: 'Access denied.',
-      });
-    }
     const query = { status: 'active' };
     if (req.user?.role === 'regional_manager') {
       const franchiseIds = await getRegionalManagerFranchiseIds(req);
@@ -411,7 +400,7 @@ export const getFranchiseAgents = async (req, res, next) => {
       if (!canAccess) {
         return res.status(403).json({
           success: false,
-          message: 'Access denied. You can only view agents of franchises associated with you.',
+          message: 'Access denied. You can only view partners of franchises associated with you.',
         });
       }
     }

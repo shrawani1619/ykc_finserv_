@@ -18,6 +18,9 @@ documentRouter.use(authenticate);
 // Upload document
 documentRouter.post('/', uploadDocument);
 
+// Download document (must be before entity route so \"/:id/download\" is not captured as entityType/entityId)
+documentRouter.get('/:id/download', downloadDocument);
+
 // Get documents for an entity
 documentRouter.get('/:entityType/:entityId', getDocuments);
 
@@ -29,8 +32,5 @@ documentRouter.post('/:id/verify', requireRole('relationship_manager', 'franchis
 
 // Delete document
 documentRouter.delete('/:id', deleteDocument);
-
-// Download document
-documentRouter.get('/:id/download', downloadDocument);
 
 export default documentRouter;

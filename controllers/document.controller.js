@@ -5,6 +5,10 @@ import User from '../models/user.model.js';
 import Lead from '../models/lead.model.js';
 import Franchise from '../models/franchise.model.js';
 import RelationshipManager from '../models/relationship.model.js';
+import { v2 as cloudinary } from 'cloudinary';
+import path from 'path';
+import fs from 'fs';
+import https from 'https';
 
 /**
  * Authorization helper - determines if a user can view documents for an entity
@@ -12,6 +16,11 @@ import RelationshipManager from '../models/relationship.model.js';
 const canViewEntity = async (user, entityType, entityId) => {
   if (!user) return false;
   if (user.role === 'super_admin') return true;
+
+  // Any authenticated user can view invoice documents (attachments visible to all roles)
+  if (entityType === 'invoice') {
+    return true;
+  }
 
   // Agent: can view documents of leads he created
   if (user.role === 'agent') {
@@ -98,6 +107,14 @@ const canViewEntity = async (user, entityType, entityId) => {
         return !!rm && rm.regionalManager && rm.regionalManager.toString() === user._id.toString();
       }
       return false;
+    }
+    if (entityType === 'invoice') {
+      const Invoice = (await import('../models/invoice.model.js')).default;
+      const inv = await Invoice.findById(entityId).select('franchise').populate('franchise', 'regionalManager');
+      if (!inv || !inv.franchise) return false;
+      const franchiseId = inv.franchise._id || inv.franchise;
+      const franchise = await Franchise.findById(franchiseId).select('regionalManager');
+      return !!franchise && franchise.regionalManager && franchise.regionalManager.toString() === user._id.toString();
     }
   }
 
@@ -289,7 +306,11 @@ export const deleteDocument = async (req, res, next) => {
 };
 
 /**
- * Download document file
+ * Download / view document file
+ * - PDFs: stream inline so they open in browser (no forced download)
+ * - Other types:
+ *   - Cloudinary: redirect to signed URL
+ *   - Local: download from disk
  */
 export const downloadDocument = async (req, res, next) => {
   try {
@@ -301,13 +322,85 @@ export const downloadDocument = async (req, res, next) => {
         message: 'Document not found',
       });
     }
-    // Authorization: ensure user can download/view this document
-    const allowed = await canViewEntity(req.user, document.entityType, document.entityId);
-    if (!allowed) {
-      return res.status(403).json({ success: false, message: 'Access denied' });
+    // PDFs: stream inline so the browser can render them instead of forcing download
+    if (document.mimeType === 'application/pdf') {
+      const filename = document.originalFileName || 'document.pdf';
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader(
+        'Content-Disposition',
+        `inline; filename="${encodeURIComponent(filename)}"`
+      );
+
+      if (document.provider === 'cloudinary' && document.url) {
+        // Stream from Cloudinary to client
+        return https
+          .get(document.url, (cloudRes) => {
+            if (cloudRes.statusCode && cloudRes.statusCode >= 400) {
+              return res.status(500).json({
+                success: false,
+                message: 'Error fetching PDF from storage',
+              });
+            }
+            cloudRes.pipe(res);
+          })
+          .on('error', () =>
+            res.status(500).json({
+              success: false,
+              message: 'Error fetching PDF from storage',
+            })
+          );
+      }
+
+      // Local PDF file
+      const filePath = document.filePath;
+      if (!filePath || filePath.startsWith('http://') || filePath.startsWith('https://')) {
+        return res.status(500).json({
+          success: false,
+          message: 'File not available for download',
+        });
+      }
+      const stream = fs.createReadStream(filePath);
+      stream.on('error', () =>
+        res.status(500).json({
+          success: false,
+          message: 'Error reading PDF from disk',
+        })
+      );
+      return stream.pipe(res);
     }
 
-    res.download(document.filePath, document.originalFileName, (err) => {
+    // Non-PDFs
+    if (document.provider === 'cloudinary' && document.publicId) {
+      const { CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET } = process.env;
+      if (CLOUDINARY_CLOUD_NAME && CLOUDINARY_API_KEY && CLOUDINARY_API_SECRET) {
+        cloudinary.config({
+          cloud_name: CLOUDINARY_CLOUD_NAME,
+          api_key: CLOUDINARY_API_KEY,
+          api_secret: CLOUDINARY_API_SECRET,
+        });
+        const resourceType = document.resourceType || 'image';
+        const signedUrl = cloudinary.url(document.publicId, {
+          sign_url: true,
+          resource_type: resourceType,
+          secure: true,
+        });
+        return res.redirect(302, signedUrl);
+      }
+      if (document.url) {
+        return res.redirect(302, document.url);
+      }
+    }
+
+    // Local non-PDF: default to download
+    const filePath = document.filePath;
+    if (!filePath || filePath.startsWith('http://') || filePath.startsWith('https://')) {
+      return res.status(500).json({
+        success: false,
+        message: 'File not available for download',
+      });
+    }
+    const filename = document.originalFileName || path.basename(filePath);
+    res.download(filePath, filename, (err) => {
       if (err) {
         return res.status(500).json({
           success: false,
