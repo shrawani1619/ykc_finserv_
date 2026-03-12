@@ -14,6 +14,46 @@ import auditService from '../services/audit.service.js';
 import { getPaginationMeta, trackLeadChanges } from '../utils/helpers.js';
 import { getRegionalManagerFranchiseIds, regionalManagerCanAccessFranchise, regionalManagerCanAccessRelationshipManager } from '../utils/regionalScope.js';
 
+const getRelationshipManagerScope = async (req) => {
+  if (req._relationshipManagerScope) {
+    return req._relationshipManagerScope;
+  }
+
+  const RM = await import('../models/relationship.model.js').then(m => m.default).catch(() => null);
+  let rmId = req.user.relationshipManagerOwned;
+
+  if (!rmId && RM) {
+    const rmDoc = await RM.findOne({ owner: req.user._id }).select('_id');
+    if (rmDoc) rmId = rmDoc._id;
+  }
+
+  const managedAgentIds = rmId
+    ? await User.find({ managedByModel: 'RelationshipManager', managedBy: rmId }).distinct('_id')
+    : [];
+
+  const allowedAgentIds = [...managedAgentIds];
+  allowedAgentIds.push(req.user._id);
+
+  const scope = { rmId, managedAgentIds, allowedAgentIds };
+  req._relationshipManagerScope = scope;
+  return scope;
+};
+
+const relationshipManagerCanAccessLead = async (req, lead) => {
+  const { rmId, allowedAgentIds } = await getRelationshipManagerScope(req);
+  if (!rmId) return false;
+
+  const leadAgentId = lead.agent?._id?.toString?.() || lead.agent?.toString?.();
+  const leadAssociatedId = lead.associated?._id?.toString?.() || lead.associated?.toString?.();
+
+  const hasAgentAccess = allowedAgentIds.map(String).includes(String(leadAgentId));
+  const hasDirectAssociation =
+    lead.associatedModel === 'RelationshipManager' &&
+    String(leadAssociatedId) === String(rmId);
+
+  return hasAgentAccess || hasDirectAssociation;
+};
+
 /**
  * Create Lead
  */
@@ -560,13 +600,9 @@ export const getLeads = async (req, res, next) => {
       query.associated = { $in: franchiseIds };
       query.associatedModel = 'Franchise';
     } else if (req.user.role === 'relationship_manager') {
-      // Relationship managers should only see leads for agents associated with their RM profile
-      const RM = await import('../models/relationship.model.js').then(m => m.default).catch(() => null);
-      let rmId = req.user.relationshipManagerOwned;
-      if (!rmId && RM) {
-        const rmDoc = await RM.findOne({ owner: req.user._id }).select('_id');
-        if (rmDoc) rmId = rmDoc._id;
-      }
+      // Relationship managers can see leads from their managed agents
+      // and leads directly assigned/forwarded to their RM profile.
+      const { rmId, allowedAgentIds } = await getRelationshipManagerScope(req);
       if (!rmId) {
         return res.status(200).json({
           success: true,
@@ -574,12 +610,10 @@ export const getLeads = async (req, res, next) => {
           pagination: getPaginationMeta(page, limit, 0),
         });
       }
-      // find agents managed by this RM
-      const agentIds = await User.find({ managedByModel: 'RelationshipManager', managedBy: rmId }).distinct('_id');
-      const allowedAgentIds = agentIds || [];
-      // include leads where agent is the relationship manager user (if any)
-      allowedAgentIds.push(req.user._id);
-      query.agent = { $in: allowedAgentIds };
+      query.$or = [
+        { agent: { $in: allowedAgentIds } },
+        { associated: rmId, associatedModel: 'RelationshipManager' },
+      ];
     }
     // super_admin: no base filter → all leads; optional filters below
 
@@ -591,13 +625,10 @@ export const getLeads = async (req, res, next) => {
       if (agentId) {
         // If relationship_manager, ensure requested agentId is within RM's scope
         if (req.user.role === 'relationship_manager') {
-          const RM = await import('../models/relationship.model.js').then(m => m.default).catch(() => null);
-          let rmId = req.user.relationshipManagerOwned;
-          if (!rmId && RM) {
-            const rmDoc = await RM.findOne({ owner: req.user._id }).select('_id');
-            if (rmDoc) rmId = rmDoc._id;
-          }
-          const allowed = await User.exists({ _id: agentId, managedByModel: 'RelationshipManager', managedBy: rmId });
+          const { rmId, allowedAgentIds } = await getRelationshipManagerScope(req);
+          const allowed =
+            allowedAgentIds.map(String).includes(String(agentId)) ||
+            await User.exists({ _id: agentId, managedByModel: 'RelationshipManager', managedBy: rmId });
           if (!allowed) {
             return res.status(403).json({ success: false, error: 'Access denied.' });
           }
@@ -709,20 +740,11 @@ export const getLeadById = async (req, res, next) => {
       }
     }
     if (req.user.role === 'relationship_manager') {
-      const RM = await import('../models/relationship.model.js').then(m => m.default).catch(() => null);
-      let rmId = req.user.relationshipManagerOwned;
-      if (!rmId && RM) {
-        const rmDoc = await RM.findOne({ owner: req.user._id }).select('_id');
-        if (rmDoc) rmId = rmDoc._id;
-      }
-      // Get agents for this RM
-      const agentIds = rmId ? await User.find({ managedByModel: 'RelationshipManager', managedBy: rmId }).distinct('_id') : [];
-      const allowedAgentIds = agentIds || [];
-      allowedAgentIds.push(req.user._id);
-      if (!allowedAgentIds.map(String).includes(lead.agent.toString())) {
+      const canAccess = await relationshipManagerCanAccessLead(req, lead);
+      if (!canAccess) {
         return res.status(403).json({
           success: false,
-          error: 'Access denied. You can only view leads associated with your agents.',
+          error: 'Access denied. You can only view leads associated with your agents or assigned to you.',
         });
       }
     }
@@ -806,19 +828,11 @@ export const updateLead = async (req, res, next) => {
       }
     }
     if (req.user.role === 'relationship_manager') {
-      const RM = await import('../models/relationship.model.js').then(m => m.default).catch(() => null);
-      let rmId = req.user.relationshipManagerOwned;
-      if (!rmId && RM) {
-        const rmDoc = await RM.findOne({ owner: req.user._id }).select('_id');
-        if (rmDoc) rmId = rmDoc._id;
-      }
-      const agentIds = rmId ? await User.find({ managedByModel: 'RelationshipManager', managedBy: rmId }).distinct('_id') : [];
-      const allowedAgentIds = agentIds || [];
-      allowedAgentIds.push(req.user._id);
-      if (!allowedAgentIds.map(String).includes(existingLead.agent.toString())) {
+      const canAccess = await relationshipManagerCanAccessLead(req, existingLead);
+      if (!canAccess) {
         return res.status(403).json({
           success: false,
-          error: 'Access denied. You can only update leads associated with your agents.',
+          error: 'Access denied. You can only update leads associated with your agents or assigned to you.',
         });
       }
     }
@@ -1077,19 +1091,11 @@ export const updateLeadStatus = async (req, res, next) => {
       }
     }
     if (req.user.role === 'relationship_manager') {
-      const RM = await import('../models/relationship.model.js').then(m => m.default).catch(() => null);
-      let rmId = req.user.relationshipManagerOwned;
-      if (!rmId && RM) {
-        const rmDoc = await RM.findOne({ owner: req.user._id }).select('_id');
-        if (rmDoc) rmId = rmDoc._id;
-      }
-      const agentIds = rmId ? await User.find({ managedByModel: 'RelationshipManager', managedBy: rmId }).distinct('_id') : [];
-      const allowedAgentIds = agentIds || [];
-      allowedAgentIds.push(req.user._id);
-      if (!allowedAgentIds.map(String).includes(existingLead.agent.toString())) {
+      const canAccess = await relationshipManagerCanAccessLead(req, existingLead);
+      if (!canAccess) {
         return res.status(403).json({
           success: false,
-          error: 'Access denied. You can only update leads associated with your agents.',
+          error: 'Access denied. You can only update leads associated with your agents or assigned to you.',
         });
       }
     }
@@ -1243,19 +1249,11 @@ export const verifyLead = async (req, res, next) => {
       }
     }
     if (req.user.role === 'relationship_manager') {
-      const RM = await import('../models/relationship.model.js').then(m => m.default).catch(() => null);
-      let rmId = req.user.relationshipManagerOwned;
-      if (!rmId && RM) {
-        const rmDoc = await RM.findOne({ owner: req.user._id }).select('_id');
-        if (rmDoc) rmId = rmDoc._id;
-      }
-      const agentIds = rmId ? await User.find({ managedByModel: 'RelationshipManager', managedBy: rmId }).distinct('_id') : [];
-      const allowedAgentIds = agentIds || [];
-      allowedAgentIds.push(req.user._id);
-      if (!allowedAgentIds.map(String).includes(existingLead.agent.toString())) {
+      const canAccess = await relationshipManagerCanAccessLead(req, existingLead);
+      if (!canAccess) {
         return res.status(403).json({
           success: false,
-          error: 'Access denied. You can only verify leads associated with your agents.',
+          error: 'Access denied. You can only verify leads associated with your agents or assigned to you.',
         });
       }
     }
@@ -1446,19 +1444,11 @@ export const deleteLead = async (req, res, next) => {
       }
     }
     if (req.user.role === 'relationship_manager') {
-      const RM = await import('../models/relationship.model.js').then(m => m.default).catch(() => null);
-      let rmId = req.user.relationshipManagerOwned;
-      if (!rmId && RM) {
-        const rmDoc = await RM.findOne({ owner: req.user._id }).select('_id');
-        if (rmDoc) rmId = rmDoc._id;
-      }
-      const agentIds = rmId ? await User.find({ managedByModel: 'RelationshipManager', managedBy: rmId }).distinct('_id') : [];
-      const allowedAgentIds = agentIds || [];
-      allowedAgentIds.push(req.user._id);
-      if (!allowedAgentIds.map(String).includes(lead.agent.toString())) {
+      const canAccess = await relationshipManagerCanAccessLead(req, lead);
+      if (!canAccess) {
         return res.status(403).json({
           success: false,
-          error: 'Access denied. You can only delete leads associated with your agents.',
+          error: 'Access denied. You can only delete leads associated with your agents or assigned to you.',
         });
       }
     }
@@ -1554,19 +1544,11 @@ export const getLeadHistory = async (req, res, next) => {
       }
     }
     if (req.user.role === 'relationship_manager') {
-      const RM = await import('../models/relationship.model.js').then(m => m.default).catch(() => null);
-      let rmId = req.user.relationshipManagerOwned;
-      if (!rmId && RM) {
-        const rmDoc = await RM.findOne({ owner: req.user._id }).select('_id');
-        if (rmDoc) rmId = rmDoc._id;
-      }
-      const agentIds = rmId ? await User.find({ managedByModel: 'RelationshipManager', managedBy: rmId }).distinct('_id') : [];
-      const allowedAgentIds = agentIds || [];
-      allowedAgentIds.push(req.user._id);
-      if (!allowedAgentIds.map(String).includes(lead.agent.toString())) {
+      const canAccess = await relationshipManagerCanAccessLead(req, lead);
+      if (!canAccess) {
         return res.status(403).json({
           success: false,
-          error: 'Access denied. You can only view history of leads associated with your agents.',
+          error: 'Access denied. You can only view history of leads associated with your agents or assigned to you.',
         });
       }
     }
